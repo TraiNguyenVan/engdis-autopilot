@@ -1,0 +1,158 @@
+"""Best-effort unit coverage.
+
+Walks every lesson of a unit, runs auto.py on each one, records where it
+failed, and moves on to the next lesson instead of stopping. Prints a
+summary and writes cover_report.json.
+
+Usage:  python3 cover.py [unit_index] [passes] [--dry]
+        unit_index is 0-based (Unit 2 == 1)
+"""
+import json
+import os
+import subprocess
+import sys
+import time
+
+import edlib
+
+HOME = "https://ed22.engdis.com/ptithcm#/home"
+HERE = os.path.dirname(os.path.abspath(__file__))
+PER_LESSON_TIMEOUT = 1500
+
+HOME_JS = """(() => {
+  const w = document.querySelectorAll('.home__unitW');
+  if (!w.length) return {err:'no units on page'};
+  let s = angular.element(w[0]).scope();
+  while (s && !s.unitsCtrl) s = s.$parent;
+  if (!s) return {err:'no unitsCtrl'};
+  const c = s.unitsCtrl;
+  return {units: (c.units||[]).map((u,i) => ({
+    i: i, name: u.Name, progress: u.Progress,
+    lessons: (u.Children||[]).map((l,j) => ({
+      j: j, name: l.Name, id: l.NodeId, progress: l.Progress, done: !!l.IsDone
+    }))
+  }))};
+})()"""
+
+GOTO_JS = """(() => {
+  const w = document.querySelectorAll('.home__unitW');
+  if (!w.length) return 'no units';
+  let s = angular.element(w[0]).scope();
+  while (s && !s.unitsCtrl) s = s.$parent;
+  if (!s) return 'no unitsCtrl';
+  const c = s.unitsCtrl;
+  const u = c.units[%d];
+  if (!u) return 'no unit';
+  const l = u.Children[%d];
+  if (!l) return 'no lesson';
+  try { c.goToLesson(l, false, 'Unit'); return 'ok ' + l.Name; }
+  catch (e) { return 'err ' + e; }
+})()"""
+
+
+def home_state(t):
+    t.goto(HOME)
+    time.sleep(6)
+    for _ in range(6):
+        d = t.js(HOME_JS)
+        if isinstance(d, dict) and d.get("units"):
+            return d
+        time.sleep(3)
+    return {}
+
+
+def goto_lesson(t, unit_i, lesson_j):
+    t.goto(HOME)
+    time.sleep(5)
+    r = t.js(GOTO_JS % (unit_i, lesson_j))
+    time.sleep(10)
+    return r
+
+
+def run_lesson(lesson_name, max_iter=90):
+    """Run auto.py once; bounded, never raises."""
+    cmd = [sys.executable, "auto.py", str(max_iter)]
+    started = time.time()
+    try:
+        p = subprocess.run(cmd, cwd=HERE, capture_output=True, text=True,
+                           timeout=PER_LESSON_TIMEOUT)
+        rc = p.returncode
+        tail = [ln for ln in p.stdout.strip().split("\n") if ln.strip()][-4:]
+    except subprocess.TimeoutExpired:
+        rc, tail = "timeout", ["timeout"]
+    dur = int(time.time() - started)
+    return rc, tail, dur
+
+
+def _num(x):
+    while isinstance(x, (list, tuple)):
+        x = x[0] if x else 0
+    try:
+        return float(x or 0)
+    except (TypeError, ValueError):
+        return 0.0
+
+
+def pct(x):
+    return f"{round(_num(x) * 100)}%"
+
+
+def main():
+    unit_i = int(sys.argv[1]) if len(sys.argv) > 1 and sys.argv[1].isdigit() else 1
+    args = [a for a in sys.argv[1:] if not a.isdigit()]
+    passes = 2
+    dry = "--dry" in args
+    skips = [a.split("=", 1)[1] for a in args if a.startswith("--skip=")]
+    for a in args:
+        if a.startswith("--passes="):
+            passes = int(a.split("=")[1])
+
+    t = edlib.tab()
+    h = home_state(t)
+    if not h.get("units"):
+        print("no home data", h)
+        return 2
+    unit = h["units"][unit_i]
+    print(f"UNIT {unit_i}: {unit['name']} {pct(unit['progress'])} | {len(unit['lessons'])} lessons")
+
+    report = {"unit": unit["name"], "lessons": {}, "passes": passes}
+    for p in range(passes):
+        h = home_state(t)
+        unit = h["units"][unit_i]
+        todo = [l for l in unit["lessons"] if _num(l["progress"]) < 0.999
+                and not any(k.lower() in (l["name"] or "").lower() for k in skips)]
+        if not todo:
+            print("all lessons complete")
+            break
+        print(f"-- pass {p + 1}: {len(todo)} lesson(s) to do")
+        for l in todo:
+            print(f"[{l['j']}] {l['name']} {pct(l['progress'])}", flush=True)
+            if dry:
+                continue
+            nav = goto_lesson(t, unit_i, l["j"])
+            if not str(nav).startswith("ok"):
+                print("   nav failed:", nav)
+                report["lessons"][l["name"]] = {"nav": str(nav)}
+                continue
+            rc, tail, dur = run_lesson(l["name"])
+            print(f"   rc={rc} {dur}s | " + " / ".join(tail[-2:]), flush=True)
+            report["lessons"][l["name"]] = {"rc": rc, "dur": dur, "tail": tail,
+                                            "start_progress": l["progress"]}
+        if dry:
+            break
+
+    h = home_state(t)
+    unit = h["units"][unit_i]
+    print(f"RESULT unit {pct(unit['progress'])}")
+    for l in unit["lessons"]:
+        print(f"  {l['name']}: {pct(l['progress'])}")
+        report["lessons"].setdefault(l["name"], {})["final"] = l["progress"]
+    report["unit_progress"] = unit["progress"]
+    with open(os.path.join(HERE, "cover_report.json"), "w") as f:
+        json.dump(report, f, indent=1)
+    print("report: cover_report.json")
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

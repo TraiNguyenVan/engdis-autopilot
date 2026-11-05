@@ -1,0 +1,24 @@
+{
+ "unit": "Business Careers",
+ "lessons": {
+  "Work": {
+   "final": 1
+  },
+  "A Career in Business": {
+   "final": 1
+  },
+  "I'm Worried": {
+   "final": 0.6666667
+  },
+  "Had Better vs. Would Rather": {
+   "final": 1
+  },
+  "Business 2": {
+   "final": 1
+  }
+ },
+ "passes": 2,
+ "unit_progress": [
+  0.9333333
+ ]
+}
