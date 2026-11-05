@@ -1,5 +1,5 @@
 #!/bin/bash
-cd /opt/data/cache/scratch/ed22u1 || exit 1
+cd "$(dirname "$0")" || exit 1
 
 CHROME=/opt/hermes/tools/chromium-1208/chrome-linux64/chrome
 PROFILE=/opt/data/cache/scratch/chrome-ed22c/profile
