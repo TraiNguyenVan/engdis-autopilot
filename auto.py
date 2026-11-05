@@ -69,16 +69,15 @@ def wait_text(t, needles, timeout=25):
 
 def handle_speaking(t, src):
     """Speaking / interact recording: click Start, let it record, stop if needed."""
-    # Check for Try again (speaking failed)
-    if click_text(t, "Try again"):
-        time.sleep(3.5)
-        return "speak: try-again-clicked"
+    # Speech already rejected by the server: don't re-record, let the try counter trip SPEAK-BLOCKED
+    if q(t, "/Try again|record your answer again/i.test(document.body.innerText) ? 1 : 0;"):
+        return "speak: blocked"
     
     if q(t, "return document.querySelectorAll('a.chooseCaracterArrow').length;"):
         t.js("(() => {const a=document.querySelectorAll('a.chooseCaracterArrow'); if(a.length) a[0].click(); return 1;})()")
         time.sleep(2)
     if not click_text(t, "Start"):
-        return "speak: no-start"
+        return "speak: blocked"
     time.sleep(3.5)
     return "speak: clicked"
 
@@ -207,11 +206,14 @@ def main(max_iter=120):
                     solver.play_media(t, timeout=70)
                 kind = t.js("""(() => {
                   if(document.querySelectorAll('a.chooseCaracterArrow').length) return 'speak';
+                  // speaking tasks also render options; text sniff must win over mcq/multi
+                  if(/record the correct answer|record your answer/i.test(document.body.innerText)) return 'speak';
                   if(document.querySelector('.prMCQ__qaSet')) return 'mcq';
                   if(document.querySelectorAll('.lessonMultipleAnswer').length) return 'multi';
                   if(document.querySelectorAll('.dnditem').length && document.querySelectorAll('.dndZone').length) return 'drag';
                   if(window.tinymce && tinymce.activeEditor) return 'write';
-                  const a=[...document.querySelectorAll('a.button.continue')].map(e=>(e.innerText||'').trim());
+                  const a=[...document.querySelectorAll('a.button.continue,button.button.continue,input.button.continue,button,input[type=button]')]
+                    .map(e=>(e.innerText||e.value||'').trim());
                   if(a.includes('Start')) return 'speak';
                   return 'other';
                 })()""")
