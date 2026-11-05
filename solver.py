@@ -29,6 +29,7 @@ def ask(prompt, audio_b64=None, max_tokens=800):
             body = urllib.request.urlopen(req, timeout=180).read().decode()
         except Exception as e:
             last = e
+            print("! llm %s: %s" % (model, str(e)[:140]), flush=True)
             time.sleep(1.5)
             continue
         if body.lstrip().startswith("data:"):
@@ -48,6 +49,7 @@ def ask(prompt, audio_b64=None, max_tokens=800):
             return json.loads(body)["choices"][0]["message"]["content"]
         except Exception as e:
             last = e
+            print("! llm %s parse: %s" % (model, str(e)[:140]), flush=True)
     raise last if last else RuntimeError("llm failed")
 
 
@@ -58,7 +60,8 @@ def ask_json(prompt, audio_b64=None, max_tokens=800):
         return None
     try:
         return json.loads(txt[i:j + 1])
-    except Exception:
+    except Exception as e:
+        print("! json: %s | raw=%r" % (str(e)[:80], txt[:120]), flush=True)
         return None
 
 

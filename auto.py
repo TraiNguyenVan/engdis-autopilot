@@ -113,8 +113,9 @@ def handle_test(t, src):
             key = url.rsplit('/', 1)[-1].rsplit('.', 1)[0]
             try:
                 tr = solver.transcript_for(url, key)
-            except Exception:
+            except Exception as e:
                 tr = ''
+                print("! transcript %s: %s" % (key, str(e)[:140]), flush=True)
             if tr:
                 src = "[TRANSCRIPT]\n" + tr + "\n\n" + src
                 print("test transcript", key, len(tr))
