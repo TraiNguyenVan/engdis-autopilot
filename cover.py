@@ -10,6 +10,7 @@ Usage:  python3 cover.py [unit_index] [passes] [--dry]
 import json
 import os
 import subprocess
+import threading
 import sys
 import time
 
@@ -73,15 +74,32 @@ def run_lesson(lesson_name, max_iter=90):
     """Run auto.py once; bounded, never raises."""
     cmd = [sys.executable, "auto.py", str(max_iter)]
     started = time.time()
+    os.makedirs(os.path.join(HERE, "logs"), exist_ok=True)
+    safe = "".join(c if c.isalnum() or c in " -_" else "_" for c in lesson_name).strip()
+    lp = os.path.join(HERE, "logs", safe + ".log")
+    tail = []
     try:
-        p = subprocess.run(cmd, cwd=HERE, capture_output=True, text=True,
-                           timeout=PER_LESSON_TIMEOUT)
-        rc = p.returncode
-        tail = [ln for ln in p.stdout.strip().split("\n") if ln.strip()][-4:]
+        with open(lp, "a") as lf:
+            lf.write("\n=== %s %s\n" % (time.strftime("%H:%M:%S"), lesson_name))
+            lf.flush()
+            p = subprocess.Popen(cmd, cwd=HERE, stdout=subprocess.PIPE,
+                                 stderr=subprocess.STDOUT, text=True, bufsize=1)
+            killer = threading.Timer(PER_LESSON_TIMEOUT, p.kill)
+            killer.start()
+            for line in p.stdout:
+                lf.write(line)
+                lf.flush()
+                if line.strip():
+                    tail.append(line.rstrip())
+                    tail = tail[-6:]
+            p.wait()
+            killer.cancel()
+            rc = p.returncode
     except subprocess.TimeoutExpired:
+        p.kill()
         rc, tail = "timeout", ["timeout"]
     dur = int(time.time() - started)
-    return rc, tail, dur
+    return rc, tail[-4:], dur
 
 
 def _num(x):
