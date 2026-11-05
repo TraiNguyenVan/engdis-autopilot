@@ -1,0 +1,16 @@
+# secrets / session material
+cookies*.json
+ck*.json
+ls_live.json
+ss_live.json
+auth*.json
+# media + screenshots + logs
+*.png
+*.jpg
+*.mp4
+*.mp3
+*.wav
+*.log
+m_*.mp3
+net_dump.json
+__pycache__/
