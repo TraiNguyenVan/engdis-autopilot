@@ -1,14 +1,24 @@
-#!/bin/sh
-# Walk every unit from $1 to $2 (0-based), one cover.py run each.
-# Stops early if ./STOP exists. Logs: cover_u<idx>.log
+#!/usr/bin/env bash
+# Run cover.py across one or more units.
+# Supports:
+#   ./cover_all.sh 8 9 2      (from to passes)
+#   ./cover_all.sh 8-9 2      (unit_spec passes)
+#   ./cover_all.sh all 1      (spec passes)
+# Stops early if ./STOP exists.
 cd "$(dirname "$0")" || exit 1
-FROM=${1:-0}
-TO=${2:-9}
-PASSES=${3:-1}
-for i in $(seq "$FROM" "$TO"); do
-  [ -f STOP ] && { echo "STOP file present, halting at unit $i"; break; }
-  echo "=== unit $i $(date +%H:%M:%S)"
-  python3 cover.py "$i" "$PASSES" >> "cover_u$i.log" 2>&1
-  echo "=== unit $i rc=$? $(date +%H:%M:%S)"
-  tail -8 "cover_u$i.log"
-done
+
+ARG1="${1:-0-9}"
+ARG2="${2:-}"
+ARG3="${3:-}"
+
+if [ -n "$ARG2" ] && [[ "$ARG1" =~ ^[0-9]+$ ]] && [[ "$ARG2" =~ ^[0-9]+$ ]] && [ -n "$ARG3" -o "$ARG1" != "$ARG2" ]; then
+  # Legacy syntax: FROM TO PASSES
+  UNIT_SPEC="${ARG1}-${ARG2}"
+  PASSES="${ARG3:-1}"
+else
+  UNIT_SPEC="${ARG1}"
+  PASSES="${ARG2:-1}"
+fi
+
+echo "=== Running cover.py for units: ${UNIT_SPEC} (passes: ${PASSES}) ==="
+exec python3 cover.py "${UNIT_SPEC}" "${PASSES}"

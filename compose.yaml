@@ -18,6 +18,7 @@ services:
           memory: 512M
     environment:
       - ED_UNIT=${ED_UNIT:-0}
+      - ED_UNITS=${ED_UNITS:-}
       - ED_PASSES=${ED_PASSES:-1}
       - ED_DRY_RUN=${ED_DRY_RUN:-1}
       - ED_SKIP=${ED_SKIP:-}

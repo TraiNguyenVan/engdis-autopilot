@@ -1,13 +1,16 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-ED_UNIT="${ED_UNIT:-0}"
+ED_UNIT="${ED_UNIT:-}"
+ED_UNITS="${ED_UNITS:-}"
+# Unified unit specification: ED_UNITS takes precedence, fallback to ED_UNIT, default to 0
+TARGET_UNITS="${ED_UNITS:-${ED_UNIT:-0}}"
 ED_PASSES="${ED_PASSES:-1}"
 ED_DRY_RUN="${ED_DRY_RUN:-1}"
 ED_CDP_PORT="${ED_CDP_PORT:-9225}"
 
 echo "=== Engdis Autopilot Container Starting ==="
-echo "Unit: ${ED_UNIT} | Passes: ${ED_PASSES} | Dry Run: ${ED_DRY_RUN}"
+echo "Units: ${TARGET_UNITS} | Passes: ${ED_PASSES} | Dry Run: ${ED_DRY_RUN}"
 
 mkdir -p /data/profile /data/cache /data/reports
 export ED_SCRATCH=/data/cache
@@ -49,7 +52,7 @@ if [ -n "${ED_SKIP:-}" ]; then
   EXTRA_ARGS="${EXTRA_ARGS} --skip=${ED_SKIP}"
 fi
 
-python3 /app/cover.py "${ED_UNIT}" "${ED_PASSES}" ${EXTRA_ARGS}
+python3 /app/cover.py "${TARGET_UNITS}" "${ED_PASSES}" ${EXTRA_ARGS}
 RC=$?
 
 echo "=== cover.py finished with exit code ${RC} ==="

@@ -129,30 +129,57 @@ def pct(x):
     return f"{round(_num(x) * 100)}%"
 
 
-def main():
-    unit_i = int(sys.argv[1]) if len(sys.argv) > 1 and sys.argv[1].isdigit() else 1
-    args = [a for a in sys.argv[1:] if not a.isdigit()]
-    passes = 2
-    dry = "--dry" in args
-    skips = [a.split("=", 1)[1] for a in args if a.startswith("--skip=")]
-    for a in args:
-        if a.startswith("--passes="):
-            passes = int(a.split("=")[1])
+def parse_unit_specs(spec, total_units=10):
+    """Parse unit specifications like '8', '8-9', '8..9', '0,2,4-6', 'all'.
+    Returns a sorted list of unique 0-based unit indices within [0, total_units - 1].
+    """
+    if spec is None:
+        return [0]
+    spec = str(spec).strip().lower()
+    if not spec:
+        return [0]
+    if spec == "all":
+        return list(range(total_units))
 
-    t = edlib.tab()
-    if not login.ensure_login(t):
-        print("LOGIN-FAIL")
-        return 4
+    indices = set()
+    parts = [p.strip() for p in spec.replace(";", ",").split(",") if p.strip()]
+    for part in parts:
+        if ".." in part:
+            start_s, end_s = part.split("..", 1)
+            start, end = int(start_s), int(end_s)
+            indices.update(range(start, end + 1))
+        elif "-" in part and not part.startswith("-"):
+            start_s, end_s = part.split("-", 1)
+            start, end = int(start_s), int(end_s)
+            indices.update(range(start, end + 1))
+        elif part.isdigit():
+            indices.add(int(part))
+        else:
+            raise ValueError(f"Invalid unit spec: {part!r}")
+
+    valid = sorted(i for i in indices if 0 <= i < total_units)
+    if not valid:
+        raise ValueError(f"No valid units parsed from spec: {spec!r} (total={total_units})")
+    return valid
+
+
+def cover_unit(t, unit_i, passes=2, dry=False, skips=None):
+    skips = skips or []
     h = home_state(t)
-    if not h.get("units"):
-        print("no home data", h)
-        return 2
+    if not h.get("units") or unit_i >= len(h["units"]):
+        print(f"no home data or invalid unit index {unit_i}")
+        return None
     unit = h["units"][unit_i]
+    print(f"\n==========================================")
     print(f"UNIT {unit_i}: {unit['name']} {pct(unit['progress'])} | {len(unit['lessons'])} lessons")
+    print(f"==========================================")
 
-    report = {"unit": unit["name"], "lessons": {}, "passes": passes}
+    report = {"unit": unit["name"], "unit_index": unit_i, "lessons": {}, "passes": passes}
     blocked = set()
     for p in range(passes):
+        if os.path.exists(os.path.join(HERE, "STOP")):
+            print("STOP file present, halting passes")
+            break
         h = home_state(t)
         unit = h["units"][unit_i]
         todo = [l for l in unit["lessons"] if _num(l["progress"]) < 0.999
@@ -163,6 +190,9 @@ def main():
             break
         print(f"-- pass {p + 1}: {len(todo)} lesson(s) to do")
         for l in todo:
+            if os.path.exists(os.path.join(HERE, "STOP")):
+                print("STOP file present, halting lessons")
+                break
             print(f"[{l['j']}] {l['name']} {pct(l['progress'])}", flush=True)
             if dry:
                 continue
@@ -186,7 +216,7 @@ def main():
 
     h = home_state(t)
     unit = h["units"][unit_i]
-    print(f"RESULT unit {pct(unit['progress'])}")
+    print(f"RESULT unit {unit_i} ({unit['name']}): {pct(unit['progress'])}")
     for l in unit["lessons"]:
         print(f"  {l['name']}: {pct(l['progress'])}")
         report["lessons"].setdefault(l["name"], {})["final"] = l["progress"]
@@ -199,6 +229,51 @@ def main():
     with open(os.path.join(out_dir, "cover_report.json"), "w") as f:
         json.dump(report, f, indent=1)
     print("report:", rname)
+    return report
+
+
+def main():
+    pos_args = []
+    flags = []
+    for a in sys.argv[1:]:
+        if a.startswith("--"):
+            flags.append(a)
+        else:
+            pos_args.append(a)
+
+    raw_spec = pos_args[0] if pos_args else os.environ.get("ED_UNITS") or os.environ.get("ED_UNIT") or "1"
+    passes = int(pos_args[1]) if len(pos_args) > 1 and pos_args[1].isdigit() else 2
+    for f in flags:
+        if f.startswith("--passes="):
+            passes = int(f.split("=", 1)[1])
+    dry = "--dry" in flags
+    skips = [f.split("=", 1)[1] for f in flags if f.startswith("--skip=")]
+
+    t = edlib.tab()
+    if not login.ensure_login(t):
+        print("LOGIN-FAIL")
+        return 4
+    h = home_state(t)
+    if not h.get("units"):
+        print("no home data", h)
+        return 2
+
+    target_units = parse_unit_specs(raw_spec, total_units=len(h["units"]))
+    print(f"Target units: {target_units} (passes={passes}, dry={dry}, skips={skips})")
+
+    all_reports = []
+    for u_idx in target_units:
+        if os.path.exists(os.path.join(HERE, "STOP")):
+            print("STOP file present, stopping multi-unit walk")
+            break
+        rep = cover_unit(t, u_idx, passes=passes, dry=dry, skips=skips)
+        if rep:
+            all_reports.append(rep)
+
+    if len(target_units) > 1:
+        print("\n================ MULTI-UNIT SUMMARY ================")
+        for r in all_reports:
+            print(f"Unit {r['unit_index']} ({r['unit']}): {pct(r['unit_progress'])}")
     return 0
 
 
