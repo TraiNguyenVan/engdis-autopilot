@@ -146,10 +146,17 @@ def handle_test(t, src):
         poll.wait_until(
             lambda: q(t, "return document.querySelector('iframe#colorBoxIframe')?1:0;"),
             lambda v: v == 1, timeout=8.0, interval=0.2)
-        t.js("""(() => {const f=[...document.querySelectorAll('iframe#colorBoxIframe')].pop(); if(!f) return 1;
-          const d=f.contentDocument; const b=[...d.querySelectorAll('input[type=button],button,a')]
-            .filter(e=>/^(OK|Ok|Continue|Submit)$/i.test((e.value||e.innerText||'').trim()));
-          if(b.length) b[b.length-1].click(); return 1;})()""")
+        t.js("""(() => {const f=[...document.querySelectorAll('iframe#colorBoxIframe')].pop();
+          if(f && f.contentDocument) {
+            const d=f.contentDocument;
+            const b=[...d.querySelectorAll('input[type=button],input[type=submit],button,a')]
+              .filter(e=>/ok|continue|submit|yes|confirm/i.test((e.value||e.innerText||'').trim()));
+            if(b.length) { b[b.length-1].click(); return 1; }
+          }
+          const b2=[...document.querySelectorAll('#colorbox input, #colorbox button, #colorbox a, .modal button')]
+            .filter(e=>/ok|continue|submit|yes|confirm/i.test((e.value||e.innerText||'').trim()));
+          if(b2.length) { b2[b2.length-1].click(); return 2; }
+          return 0;})()""")
         body = poll.wait_until(
             lambda: t.js("(() => document.body.innerText.slice(0,500))()"),
             lambda b: bool(b) and "%" in b, timeout=12.0, interval=0.3) or ""
@@ -252,11 +259,9 @@ def main(max_iter=120):
                 key = (s["lesson"], s["step"], s["counter"])
                 adv = adv_tries.get(key, 0) + 1
                 adv_tries[key] = adv
-                print(f"-- practice done (progress={sp}); advancing [{adv}/3]")
-                if adv > 3:
-                    print("STEP-BLOCKED", key)
-                    sys.exit(7)
-                advance(t)
+                print(f"-- practice done (progress={sp}); advancing to test [{adv}/3]")
+                if not advance(t) or adv > 2:
+                    solver.set_step(t, 2)
                 prev = None
                 continue
 
