@@ -27,7 +27,7 @@ services:
       - ED_CRED=/run/secrets/engdis_cred
     volumes:
       - engdis_data:/data
-      - ${ED_CRED_FILE:-/opt/data/.config/engdis/cred}:/run/secrets/engdis_cred:ro
+      - ${ED_CRED_FILE:-/home/yes/.hermes/.config/engdis/cred}:/run/secrets/engdis_cred:ro
     restart: "no"
 
 volumes:
