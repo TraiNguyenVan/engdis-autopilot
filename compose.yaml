@@ -20,6 +20,7 @@ services:
       - ED_UNIT=${ED_UNIT:-0}
       - ED_PASSES=${ED_PASSES:-1}
       - ED_DRY_RUN=${ED_DRY_RUN:-1}
+      - ED_SKIP=${ED_SKIP:-}
       - ED_CDP_PORT=9225
       - ED_USER=${ED_USER:-}
       - ED_PASS=${ED_PASS:-}

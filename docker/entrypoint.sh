@@ -45,6 +45,9 @@ EXTRA_ARGS=""
 if [ "${ED_DRY_RUN}" = "1" ] || [ "${ED_DRY_RUN}" = "true" ]; then
   EXTRA_ARGS="--dry"
 fi
+if [ -n "${ED_SKIP:-}" ]; then
+  EXTRA_ARGS="${EXTRA_ARGS} --skip=${ED_SKIP}"
+fi
 
 python3 /app/cover.py "${ED_UNIT}" "${ED_PASSES}" ${EXTRA_ARGS}
 RC=$?
