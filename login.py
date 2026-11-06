@@ -48,19 +48,17 @@ def creds():
     u, p = os.environ.get("ED_USER"), os.environ.get("ED_PASS")
     if u and p:
         return u, p
+    if not CRED or not os.path.isfile(CRED):
+        return None, None
     try:
         st = os.stat(CRED)
-    except FileNotFoundError:
-        return None, None
-    if st.st_mode & 0o077:
-        print("login: warning — %s is readable by group/other; chmod 600" % CRED)
-    try:
+        if st.st_mode & 0o077:
+            print("login: warning — %s is readable by group/other; chmod 600" % CRED)
         lines = [x.strip() for x in open(CRED, encoding="utf-8").read().splitlines() if x.strip()]
+        if len(lines) >= 2:
+            return lines[0], lines[1]
     except OSError as e:
         print("login: cannot read %s: %s" % (CRED, e))
-        return None, None
-    if len(lines) >= 2:
-        return lines[0], lines[1]
     return None, None
 
 

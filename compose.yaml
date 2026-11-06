@@ -21,6 +21,8 @@ services:
       - ED_PASSES=${ED_PASSES:-1}
       - ED_DRY_RUN=${ED_DRY_RUN:-1}
       - ED_CDP_PORT=9225
+      - ED_USER=${ED_USER:-}
+      - ED_PASS=${ED_PASS:-}
       - OPENAI_BASE_URL=${OPENAI_BASE_URL:-https://api.openai.com/v1}
       - OPENAI_API_KEY=${OPENAI_API_KEY:-}
       - OPENAI_MODEL=${OPENAI_MODEL:-gpt-4o-mini}
