@@ -171,6 +171,10 @@ def main(max_iter=120):
         elif s.get("unit") and s["unit"] != unit_lock:
             print("UNIT-CHANGED", unit_lock, "->", s["unit"])
             sys.exit(4)
+        # bounced back to the dashboard: no lesson open, nothing to solve
+        if not s.get("lesson") and "All Units" in (s.get("body") or ""):
+            print("NO-LESSON (dashboard) — open a lesson first")
+            sys.exit(6)
         if s.get("lesson") and not lesson_lock:
             lesson_lock = s["lesson"]
         elif s.get("lesson") and lesson_lock and s["lesson"] != lesson_lock and os.environ.get("ED_LESSON_LOCK") == "1":
