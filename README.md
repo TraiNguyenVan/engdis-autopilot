@@ -2,6 +2,8 @@
 
 Isolated, reproducible container execution harness for `engdis-autopilot`.
 
+> **Recommended**: Use the **Docker setup**. Running directly on host requires matching Chromium binaries, FFmpeg, audio codecs, and specific fonts. The Docker image packages the entire runtime with pre-configured headless browser management, unprivileged security isolation, and strict RAM limits.
+
 ## Architecture & Resource Limits
 
 - **Base Image**: `python:3.11-slim-bookworm` with Chromium, FFmpeg, curl, procps.
