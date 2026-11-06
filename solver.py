@@ -9,14 +9,8 @@ import edlib
 import config
 
 LLM_URL = config.LLM_URL
-LLM_KEY = os.environ.get("NINEROUTER_API_KEY", "")
-LLM_MODELS = [
-    "ag/gemini-3.8-flash",
-    "ag/claude-sonnet-5-5-low",
-    "ag/gpt-oss-120b-medium",
-    "ag/gemini-3.7-flash-low",
-    "gemini/gemini-3.6-flash",
-]
+LLM_KEY = config.LLM_KEY
+LLM_MODELS = config.LLM_MODELS
 SCRATCH = config.SCRATCH
 
 
@@ -29,10 +23,12 @@ def ask(prompt, audio_b64=None, max_tokens=800):
     for model in LLM_MODELS:
         payload = {"model": model, "messages": [{"role": "user", "content": content}],
                    "max_tokens": max_tokens, "temperature": 0}
+        headers = {"Content-Type": "application/json"}
+        if LLM_KEY:
+            headers["Authorization"] = "Bearer " + LLM_KEY
         try:
             req = urllib.request.Request(LLM_URL, data=json.dumps(payload).encode(),
-                                        headers={"Content-Type": "application/json",
-                                                 "Authorization": "Bearer " + LLM_KEY})
+                                        headers=headers)
             body = urllib.request.urlopen(req, timeout=180).read().decode()
         except Exception as e:
             last = e

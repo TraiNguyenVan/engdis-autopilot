@@ -21,8 +21,9 @@ services:
       - ED_PASSES=${ED_PASSES:-1}
       - ED_DRY_RUN=${ED_DRY_RUN:-1}
       - ED_CDP_PORT=9225
-      - ED_LLM_URL=${ED_LLM_URL:-http://100.85.59.117:20128/v1/chat/completions}
-      - NINEROUTER_API_KEY=${NINEROUTER_API_KEY}
+      - OPENAI_BASE_URL=${OPENAI_BASE_URL:-https://api.openai.com/v1}
+      - OPENAI_API_KEY=${OPENAI_API_KEY:-}
+      - OPENAI_MODEL=${OPENAI_MODEL:-gpt-4o-mini}
       - ED_CRED=/run/secrets/engdis_cred
     volumes:
       - engdis_data:/data

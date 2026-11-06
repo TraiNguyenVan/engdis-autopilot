@@ -22,8 +22,9 @@ All parameters are configured via environment variables (defined in `config.py`)
 | `ED_PASSES` | `1` | Number of execution passes |
 | `ED_DRY_RUN` | `1` | `1` or `true` for dry-run simulation mode |
 | `ED_CDP_PORT` | `9225` | Chrome remote debugging port |
-| `ED_LLM_URL` | `http://100.85.59.117:20128/v1/chat/completions` | 9router LLM gateway endpoint |
-| `NINEROUTER_API_KEY` | *(empty)* | Optional API token for LLM calls |
+| `OPENAI_BASE_URL` | `https://api.openai.com/v1` | OpenAI-compatible endpoint URL |
+| `OPENAI_API_KEY` | *(empty)* | API key / token for LLM calls |
+| `OPENAI_MODEL` | `gpt-4o-mini` | Model name (or comma-separated list) |
 | `ED_CRED` | `/run/secrets/engdis_cred` | Path to credentials file (`username\npassword`) |
 | `ED_SCRATCH` | `/data/cache` | Scratch directory for TTS audio and temp files |
 | `ED_REPORT_DIR` | `/data/reports` | Directory where JSON run reports are written |

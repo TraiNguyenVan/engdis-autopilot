@@ -1,9 +1,9 @@
 import base64, json, os, sys, urllib.request
 import config
 
-MODELS = ["ag/gemini-3.8-flash", "ag/claude-sonnet-5-5-low", "gemini/gemini-3.6-flash"]
+MODELS = config.LLM_MODELS
 URL = config.LLM_URL
-KEY = os.environ.get("NINEROUTER_API_KEY", "")
+KEY = config.LLM_KEY
 
 def transcribe(path, prompt):
     b64 = base64.b64encode(open(path, 'rb').read()).decode()
@@ -11,8 +11,10 @@ def transcribe(path, prompt):
         payload = {"model": m, "messages": [{"role": "user", "content": [
             {"type": "text", "text": prompt},
             {"type": "input_audio", "input_audio": {"data": b64, "format": "mp3"}}]}], "max_tokens": 3000}
-        req = urllib.request.Request(URL, data=json.dumps(payload).encode(),
-            headers={"Content-Type": "application/json", "Authorization": "Bearer " + KEY})
+        headers = {"Content-Type": "application/json"}
+        if KEY:
+            headers["Authorization"] = "Bearer " + KEY
+        req = urllib.request.Request(URL, data=json.dumps(payload).encode(), headers=headers)
         try:
             r = urllib.request.urlopen(req, timeout=300)
         except Exception as e:
