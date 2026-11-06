@@ -4,7 +4,7 @@ Usage: python3 auto.py [max_iterations]
 """
 import json, os, sys, time
 
-import edlib, login, solver
+import edlib, login, poll, solver
 
 PORT = 9225
 
@@ -52,8 +52,9 @@ def advance(t, tries=3):
     for _ in range(tries):
         purge_modals(t)
         click(t, ".learning__taskNext")
-        time.sleep(2.5)
-        if cur() != before:
+        now = poll.wait_until(cur, lambda v: v != before, timeout=6.0,
+                              interval=0.2, settle=0.2)
+        if now != before:
             return True
     return False
 
@@ -119,19 +120,24 @@ def handle_test(t, src):
                 src = "[TRANSCRIPT]\n" + tr + "\n\n" + src
                 print("test transcript", key, len(tr))
     out = solver.do_task(t, src)
-    time.sleep(1)
+    poll.wait_until(
+        lambda: q(t, "return [...document.querySelectorAll('a,button,input')].some(e=>/^Check answer$/i.test((e.innerText||e.value||'').trim()))?1:0;"),
+        lambda v: v == 1, timeout=3.0, interval=0.12)
     total = st(t)["total"]
     counter = st(t)["counter"]
     sub = q(t, "return document.querySelector('.learning__submitTestLink')?1:0;")
     if sub and total and counter == total:
         click(t, ".learning__submitTestLink")
-        time.sleep(3)
+        poll.wait_until(
+            lambda: q(t, "return document.querySelector('iframe#colorBoxIframe')?1:0;"),
+            lambda v: v == 1, timeout=8.0, interval=0.2)
         t.js("""(() => {const f=[...document.querySelectorAll('iframe#colorBoxIframe')].pop(); if(!f) return 1;
           const d=f.contentDocument; const b=[...d.querySelectorAll('input[type=button],button,a')]
             .filter(e=>/^(OK|Ok|Continue|Submit)$/i.test((e.value||e.innerText||'').trim()));
           if(b.length) b[b.length-1].click(); return 1;})()""")
-        time.sleep(5)
-        body = t.js("(() => document.body.innerText.slice(0,500))()")
+        body = poll.wait_until(
+            lambda: t.js("(() => document.body.innerText.slice(0,500))()"),
+            lambda b: bool(b) and "%" in b, timeout=12.0, interval=0.3) or ""
         score = [ln for ln in body.split("\n") if "%" in ln][:2]
         return f"test-submit {score}"
     return out
@@ -188,17 +194,18 @@ def main(max_iter=120):
         if s["step"].startswith("Step 3") and s["counter"] is None and q(t, "return document.querySelector('.btnStartTest')?1:0;"):
             click(t, ".btnStartTest")
             print("test started")
-            time.sleep(6)
+            poll.wait_until(
+                lambda: q(t, "const e=document.querySelector('.learning__taskNavPCCurrentTask'); return e?e.innerText.trim():null;"),
+                lambda v: v is not None, timeout=15.0, interval=0.25)
             prev = None
             continue
 
         # a task is loaded?
         if s["counter"] is None:
             # intro / reading / interact intro: play media then advance
-            for _w in range(8):
-                if q(t, "return [...document.querySelectorAll('audio,video')].some(x=>(x.currentSrc||x.src));"):
-                    break
-                time.sleep(2)
+            poll.wait_until(
+                lambda: q(t, "return [...document.querySelectorAll('audio,video')].some(x=>(x.currentSrc||x.src))?1:0;"),
+                lambda v: v == 1, timeout=16.0, interval=0.25)
             played = solver.play_media(t, timeout=45)
             advance(t)
             print(f"-- intro (media={'y' if played else 'n'})")
@@ -212,13 +219,11 @@ def main(max_iter=120):
             if br:
                 out = br
             else:
-                for _w in range(6):
-                    ready = q(t, """const p=document.querySelector('ed-la-practicearea');
+                poll.wait_until(
+                    lambda: q(t, """const p=document.querySelector('ed-la-practicearea');
                       const tasks=document.querySelectorAll('.prMCQ__qaSet,.lessonMultipleAnswer,.dnditem,.TTpanswerDiv,.draggable,.dndZone').length;
-                      return (p && (p.innerText||'').trim().length>25) || tasks ? 1 : 0;""")
-                    if ready:
-                        break
-                    time.sleep(1.5)
+                      return (p && (p.innerText||'').trim().length>25) || tasks ? 1 : 0;"""),
+                    lambda v: v == 1, timeout=9.0, interval=0.25)
                 kind = t.js("""(() => {
                   if(document.querySelectorAll('a.chooseCaracterArrow').length) return 'speak';
                   // speaking tasks also render options; text sniff must win over mcq/multi
@@ -245,9 +250,10 @@ def main(max_iter=120):
                 elif kind in ("mcq", "multi", "drag", "write"):
                     out = solver.do_task(t, src)
                     # Click Check answer if present
-                    time.sleep(1)
                     if click_text(t, "Check answer") or click_text(t, "Check Answer"):
-                        time.sleep(1.5)
+                        poll.wait_until(
+                            lambda: q(t, "return document.querySelectorAll('.prMCQ__answers--checked').length;"),
+                            lambda v: bool(v), timeout=3.0, interval=0.12)
                 else:
                     out = solver.do_task(t, src)
                     if out.startswith("other:"):
