@@ -31,6 +31,23 @@ All parameters are configured via environment variables (defined in `config.py`)
 | `ED_SCRATCH` | `/data/cache` | Scratch directory for TTS audio and temp files |
 | `ED_REPORT_DIR` | `/data/reports` | Directory where JSON run reports are written |
 
+## Execution Architecture: Unattended vs. Progressive Patching
+
+The system supports two distinct operating models:
+
+### 1. Unattended Execution (Standalone / Headless)
+
+- **Mechanics**: Runs autonomously via the supervisor (`cover.py`) and task solver (`auto.py`). The runner navigates lessons, identifies known exercise types, executes interactions via Chrome DevTools Protocol (CDP), and logs progress.
+- **Fault Tolerance**: When an unhandled interaction pattern or unresponsive widget is encountered, the per-lesson watchdog terminates the stalled worker with a timeout (`rc=-9`), logs the failure, and proceeds to the next lesson. Subsequent passes retry incomplete lessons.
+- **Portability**: Fully functional on any standard Docker host, VM, or CI/CD environment with internet access, Chromium, FFmpeg, and an OpenAI-compatible LLM endpoint. No external supervisor or coding agent is required.
+
+### 2. Progressive Patching (Operator-in-the-Loop)
+
+- **Nature**: Progressive patching is **not** an internal auto-modifying heuristic. It is a human-or-agent-in-the-loop iterative development workflow.
+- **Diagnostics**: When tasks stall or fail, `diag_logger.py` writes structured JSONL events (`logs_diag/events.jsonl`) and persists point-of-failure DOM snapshots and screenshots (`logs_diag/evidence/`). The optional diagnostic dashboard (`dashboard_server.py`) surfaces live status, recent events, and on-demand browser screenshots.
+- **Patch Cycle**: An external operator (a developer or an interactive coding agent with workspace access) monitors the diagnostic stream, diagnoses the failing DOM structure or event sequence, applies targeted patches to `solver.py` or `auto.py`, and allows the supervisor's next pass to execute the corrected logic.
+- **Environment Dependency**: On environments without an active operator or interactive coding agent, the harness operates strictly in **Unattended Execution** mode—gracefully bypassing edge cases via timeouts rather than self-modifying code.
+
 ## LLM & Audio Transcription
 
 The harness uses a unified OpenAI-compatible endpoint for both text problem solving and audio transcription:
