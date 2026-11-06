@@ -4,6 +4,7 @@ ck*.json
 ls_live.json
 ss_live.json
 auth*.json
+
 # media + screenshots + logs
 *.png
 *.jpg
@@ -13,7 +14,16 @@ auth*.json
 *.log
 m_*.mp3
 net_dump.json
-__pycache__/
-
 net_calls*.json
 netprobe.out
+logs/
+logs_diag/
+
+# python cache
+__pycache__/
+
+# runtime state and reports
+cover_report*.json
+live_status.json
+STOP
+.hermes/
