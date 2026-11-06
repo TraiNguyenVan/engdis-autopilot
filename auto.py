@@ -157,6 +157,24 @@ def handle_test(t, src):
     return out
 
 
+def update_live_status(s, action=""):
+    try:
+        live_path = os.path.join(os.path.dirname(__file__), "live_status.json")
+        data = {
+            "time": time.time(),
+            "unit": s.get("unit") or "",
+            "lesson": s.get("lesson") or "",
+            "step": s.get("step") or "",
+            "task": s.get("counter") or "",
+            "total_tasks": s.get("total") or "",
+            "last_action": action
+        }
+        with open(live_path + ".tmp", "w", encoding="utf-8") as f:
+            json.dump(data, f)
+        os.replace(live_path + ".tmp", live_path)
+    except Exception:
+        pass
+
 def main(max_iter=120):
     t = edlib.tab()
     if not login.ensure_login(t):
@@ -196,6 +214,7 @@ def main(max_iter=120):
             print("LESSON-CHANGED", lesson_lock, "->", s["lesson"])
             sys.exit(5)
         sig = (s["lesson"], s["step"], s["counter"])
+        update_live_status(s, action=f"task_{s.get('counter') or 'step'}")
         stuck = stuck + 1 if sig == prev else 0
         prev = sig
         if stuck >= 4:
