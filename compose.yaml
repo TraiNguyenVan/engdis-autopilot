@@ -1,0 +1,33 @@
+services:
+  engdis:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    init: true
+    user: "1000:1000"
+    shm_size: "256m"
+    mem_limit: "1280m"
+    mem_reservation: "512m"
+    cpus: 1.5
+    deploy:
+      resources:
+        limits:
+          cpus: "1.5"
+          memory: 1280M
+        reservations:
+          memory: 512M
+    environment:
+      - ED_UNIT=${ED_UNIT:-0}
+      - ED_PASSES=${ED_PASSES:-1}
+      - ED_DRY_RUN=${ED_DRY_RUN:-1}
+      - ED_CDP_PORT=9225
+      - ED_LLM_URL=${ED_LLM_URL:-http://100.85.59.117:20128/v1/chat/completions}
+      - NINEROUTER_API_KEY=${NINEROUTER_API_KEY}
+      - ED_CRED=/run/secrets/engdis_cred
+    volumes:
+      - engdis_data:/data
+      - ${ED_CRED_FILE:-/opt/data/.config/engdis/cred}:/run/secrets/engdis_cred:ro
+    restart: "no"
+
+volumes:
+  engdis_data:
