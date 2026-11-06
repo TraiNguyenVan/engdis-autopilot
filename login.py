@@ -32,6 +32,10 @@ _LOGGED_JS = """(() => {
   const b = document.body ? (document.body.innerText || '') : '';
   if (/Member Login/.test(b) && !/Hello /.test(b)) return 0;
   if (/Hello /.test(b) || document.querySelector('.home__unitW')) return 1;
+  // learning area is only reachable with a live session: do NOT navigate away
+  // from it (navigating to #/home loses the open lesson)
+  if (document.querySelector('ed-la-dropdownlist')) return 1;
+  if (location.href.indexOf('learningArea') >= 0 && b.length > 200) return 1;
   // #/home still rendering: session is alive (a dead session bounces to #/login)
   if (location.href.indexOf('#/home') >= 0 && b.length > 120) return 1;
   return 0;
