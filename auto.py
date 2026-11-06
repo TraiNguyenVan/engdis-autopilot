@@ -262,6 +262,11 @@ def main(max_iter=120):
                 print(f"-- practice done (progress={sp}); advancing to test [{adv}/3]")
                 if not advance(t) or adv > 2:
                     solver.set_step(t, 2)
+                    time.sleep(1.0)
+                if adv > 4:
+                    print(f"STEP-SWITCH-STUCK ({s['lesson']}) — returning to home to clear lock")
+                    t.goto("https://ed22.engdis.com/ptithcm#/home", wait=4)
+                    adv_tries.clear()
                 prev = None
                 continue
 

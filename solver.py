@@ -387,10 +387,24 @@ def solve_writing(t, src, task_text):
       ['keyup','input','change'].forEach(ev=>{try{ed.fireEvent(ev,{});}catch(e){}
         const b=ed.getBody(); b.dispatchEvent(ev==='input'? new InputEvent('input',{bubbles:true}) : new KeyboardEvent(ev,{bubbles:true}));});
       try{ed.nodeChanged();}catch(e){} return 1;} return 0;""" % json.dumps(text))
-    time.sleep(0.8)
-    jso(t, """const b=[...document.querySelectorAll('a,button,div,span')].filter(e=>(e.innerText||'').trim()==='Done');
-      if(b.length){b[b.length-1].click(); return 1;} return 0;""")
-    time.sleep(1.5)
+    time.sleep(1.0)
+    jso(t, """(() => {
+      const b=[...document.querySelectorAll('a,button,div,span')].filter(e=>(e.innerText||'').trim()==='Done');
+      if(b.length){b[b.length-1].click(); return 1;}
+      const el = document.querySelector('.prWriting__action--submit');
+      if(el){ el.click(); return 1; }
+      return 0;
+    })()""")
+    time.sleep(1.2)
+    jso(t, """(() => {
+      const ifr = document.querySelector('iframe#colorBoxIframe');
+      const doc = ifr && ifr.contentDocument ? ifr.contentDocument : document;
+      const btns = Array.from(doc.querySelectorAll('button, input[type=button], input[type=submit], a.button, .button, #btnOk, .prWriting__modalBtn'));
+      const target = btns.find(b => /^(ok|continue|submit|yes|confirm)$/i.test((b.innerText || b.value || '').trim()));
+      if (target) { target.click(); return 1; }
+      return 0;
+    })()""")
+    time.sleep(1.0)
     words = jso(t, "const m=document.body.innerText.match(/Words: \\\\d+/); return m?m[0]:'';")
     return f"write: {words}"
 
@@ -532,10 +546,22 @@ def next_task(t):
 
 def set_step(t, index):
     """Switch step via the dropdown component API (index 0-based)."""
-    return jso(t, f"""const c=ng.probe(document.querySelectorAll('ed-la-dropdownlist')[1]).componentInstance;
-      const k=c.dropDownListObj.Children[{index}];
+    return jso(t, f"""(() => {{
+      const d = document.querySelectorAll('ed-la-dropdownlist')[1];
+      if (!d) return 'no dd';
+      const c = ng.probe(d).componentInstance;
+      if (!c) return 'no comp';
+      document.querySelectorAll('.learning__dropDownListTitleW--steps').forEach(e => {{
+        e.classList.remove('learning__dropDownListTitleW--disabled');
+      }});
+      c.selectedListItemIndex = -1;
+      const k = c.dropDownListObj && c.dropDownListObj.Children && c.dropDownListObj.Children[{index}];
+      if (!k) return 'no child';
       c.selectListItem({{preventDefault(){{}}}}, k.NodeId, false, {index + 1});
-      return k.Name;""")
+      const items = Array.from(d.querySelectorAll('.learning__dropDownList_item'));
+      if (items[{index}]) items[{index}].click();
+      return k.Name;
+    }})()""")
 
 
 def start_test(t):
