@@ -4,6 +4,7 @@ import json
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from dashboard_data import snapshot
+from dashboard_screenshot import capture
 
 HERE = Path(__file__).resolve().parent
 ASSETS = {'/': ('dashboard.html', 'text/html; charset=utf-8'), '/dashboard.js': ('dashboard.js', 'text/javascript; charset=utf-8'), '/dashboard.css': ('dashboard.css', 'text/css; charset=utf-8')}
@@ -16,12 +17,17 @@ class Handler(BaseHTTPRequestHandler):
         self.send_header('Content-Length', str(len(data)))
         self.send_header('Cache-Control', 'no-store')
         self.send_header('X-Content-Type-Options', 'nosniff')
-        self.send_header('Content-Security-Policy', "default-src 'self'; script-src 'self'; style-src 'self'; connect-src 'self'; frame-ancestors 'none'")
+        self.send_header('Content-Security-Policy', "default-src 'self'; script-src 'self'; style-src 'self'; connect-src 'self'; img-src 'self' blob:; frame-ancestors 'none'")
         self.end_headers()
         self.wfile.write(data)
     def do_GET(self):
         try:
-            if self.path == '/api/status':
+            if self.path == '/api/screenshot':
+                try:
+                    self.send_data(200, capture(), 'image/png')
+                except Exception:
+                    self.send_data(503, b'Browser screenshot unavailable', 'text/plain; charset=utf-8')
+            elif self.path == '/api/status':
                 data = json.dumps(snapshot(self.server.data_root, self.server.proc_root), allow_nan=False).encode()
                 self.send_data(200, data, 'application/json; charset=utf-8')
             elif self.path in ASSETS:

@@ -24,3 +24,20 @@ async function poll() {
   finally { setTimeout(poll, 5000); }
 }
 poll();
+let imageUrl = null;
+el('capture').addEventListener('click', async () => {
+  el('capture').disabled = true;
+  el('capture-status').textContent = 'Capturing…';
+  try {
+    const response = await fetch('/api/screenshot', {cache: 'no-store'});
+    if (!response.ok) throw new Error('Browser screenshot unavailable');
+    const blob = await response.blob();
+    if (imageUrl) URL.revokeObjectURL(imageUrl);
+    imageUrl = URL.createObjectURL(blob);
+    el('screenshot').src = imageUrl;
+    el('screenshot').hidden = false;
+    el('capture-status').textContent = 'Captured: ' + new Date().toLocaleString();
+  } catch (_) {
+    el('capture-status').textContent = 'Screenshot unavailable. Is the Engdis browser running?';
+  } finally { el('capture').disabled = false; }
+});
