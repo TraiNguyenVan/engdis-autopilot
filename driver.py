@@ -2,6 +2,7 @@
 import json, itertools, time, urllib.request
 from websockets.sync.client import connect
 from websockets.exceptions import ConnectionClosed
+import config
 
 class Tab:
     def __init__(self, ws_url):
@@ -115,7 +116,9 @@ class Tab:
         return path
 
 
-def open_tab(port=9222, url="about:blank"):
+def open_tab(port=None, url="about:blank"):
+    if port is None:
+        port = config.CDP_PORT
     tabs = json.load(urllib.request.urlopen(f"http://127.0.0.1:{port}/json"))
     pages = [t for t in tabs if t.get("type") == "page"]
     pages.sort(key=lambda t: 0 if "learningArea" in (t.get("url") or "") else 1)

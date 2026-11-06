@@ -15,9 +15,11 @@ import sys
 import time
 
 import edlib, login
+import config
 
 HOME = "https://ed22.engdis.com/ptithcm#/home"
 HERE = os.path.dirname(os.path.abspath(__file__))
+REPORT_DIR = config.REPORT_DIR
 PER_LESSON_TIMEOUT = int(os.environ.get("ED_LESSON_TIMEOUT", "1000"))
 
 HOME_JS = """(() => {
@@ -179,9 +181,11 @@ def main():
         report["lessons"].setdefault(l["name"], {})["final"] = l["progress"]
     report["unit_progress"] = unit["progress"]
     rname = "cover_report_u%d.json" % unit_i
-    with open(os.path.join(HERE, rname), "w") as f:
+    out_dir = os.path.abspath(REPORT_DIR)
+    os.makedirs(out_dir, exist_ok=True)
+    with open(os.path.join(out_dir, rname), "w") as f:
         json.dump(report, f, indent=1)
-    with open(os.path.join(HERE, "cover_report.json"), "w") as f:
+    with open(os.path.join(out_dir, "cover_report.json"), "w") as f:
         json.dump(report, f, indent=1)
     print("report:", rname)
     return 0

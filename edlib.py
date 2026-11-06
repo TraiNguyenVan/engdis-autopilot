@@ -1,8 +1,9 @@
 """Helpers for the English Discoveries learning area (ed22.engdis.com)."""
 import json, time
 import driver
+import config
 
-PORT = 9225
+PORT = config.CDP_PORT
 
 def tab():
     t = driver.open_tab(port=PORT)

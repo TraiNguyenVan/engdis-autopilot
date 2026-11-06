@@ -1,8 +1,9 @@
 import base64, json, os, sys, urllib.request
+import config
 
 MODELS = ["ag/gemini-3.8-flash", "gemini/gemini-3.6-flash", "gemini/gemini-3.5-flash-lite"]
-URL = "http://100.85.59.117:20128/v1/chat/completions"
-KEY = os.environ["NINEROUTER_API_KEY"]
+URL = config.LLM_URL
+KEY = os.environ.get("NINEROUTER_API_KEY", "")
 
 def transcribe(path, prompt):
     b64 = base64.b64encode(open(path, 'rb').read()).decode()

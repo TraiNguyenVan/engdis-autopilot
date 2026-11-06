@@ -6,11 +6,12 @@ Prints one terse line per task.
 import base64, json, os, subprocess, sys, time, urllib.request
 
 import edlib
+import config
 
-LLM_URL = "http://100.85.59.117:20128/v1/chat/completions"
+LLM_URL = config.LLM_URL
 LLM_KEY = os.environ.get("NINEROUTER_API_KEY", "")
 LLM_MODELS = ["ag/gemini-3.8-flash"]
-SCRATCH = os.environ.get("ED_SCRATCH", "/opt/data/cache/scratch/ed22u1")
+SCRATCH = config.SCRATCH
 
 
 # ---------- LLM ----------

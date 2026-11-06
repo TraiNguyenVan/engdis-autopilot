@@ -16,10 +16,11 @@ import sys
 import time
 
 import edlib
+import config
 
 LOGIN_URL = "https://ed22.engdis.com/ptithcm#/login"
 HOME_URL = "https://ed22.engdis.com/ptithcm#/home"
-CRED = os.environ.get("ED_CRED", "/opt/data/.config/engdis/cred")
+CRED = config.CRED_PATH
 
 _DECOY_JS = """(() => {
   document.querySelectorAll('input[name=aganistAutoComplete],input[name=foilautofill]')

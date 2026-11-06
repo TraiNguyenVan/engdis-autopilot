@@ -5,11 +5,12 @@ Usage: python3 auto.py [max_iterations]
 import json, os, sys, time
 
 import edlib, login, poll, solver
+import config
 from diag_logger import DiagnosticLogger
 
 diag = DiagnosticLogger(log_dir="logs_diag")
 
-PORT = 9225
+PORT = config.CDP_PORT
 
 
 def q(t, expr):
