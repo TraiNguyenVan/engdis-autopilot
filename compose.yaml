@@ -17,6 +17,7 @@ services:
         reservations:
           memory: 512M
     environment:
+      - ED_COURSE=${ED_COURSE:-}
       - ED_UNIT=${ED_UNIT:-0}
       - ED_UNITS=${ED_UNITS:-}
       - ED_PASSES=${ED_PASSES:-1}

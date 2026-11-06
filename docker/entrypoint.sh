@@ -3,6 +3,7 @@ set -euo pipefail
 
 ED_UNIT="${ED_UNIT:-}"
 ED_UNITS="${ED_UNITS:-}"
+ED_COURSE="${ED_COURSE:-}"
 # Unified unit specification: ED_UNITS takes precedence, fallback to ED_UNIT, default to 0
 TARGET_UNITS="${ED_UNITS:-${ED_UNIT:-0}}"
 ED_PASSES="${ED_PASSES:-1}"
@@ -10,7 +11,7 @@ ED_DRY_RUN="${ED_DRY_RUN:-1}"
 ED_CDP_PORT="${ED_CDP_PORT:-9225}"
 
 echo "=== Engdis Autopilot Container Starting ==="
-echo "Units: ${TARGET_UNITS} | Passes: ${ED_PASSES} | Dry Run: ${ED_DRY_RUN}"
+echo "Course: ${ED_COURSE:-<default>} | Units: ${TARGET_UNITS} | Passes: ${ED_PASSES} | Dry Run: ${ED_DRY_RUN}"
 
 mkdir -p /data/profile /data/cache /data/reports
 export ED_SCRATCH=/data/cache
@@ -44,15 +45,18 @@ if [ "${READY}" -ne 1 ]; then
 fi
 
 echo "=== Running cover.py ==="
-EXTRA_ARGS=""
+EXTRA_ARGS=()
 if [ "${ED_DRY_RUN}" = "1" ] || [ "${ED_DRY_RUN}" = "true" ]; then
-  EXTRA_ARGS="--dry"
+  EXTRA_ARGS+=("--dry")
 fi
 if [ -n "${ED_SKIP:-}" ]; then
-  EXTRA_ARGS="${EXTRA_ARGS} --skip=${ED_SKIP}"
+  EXTRA_ARGS+=("--skip=${ED_SKIP}")
+fi
+if [ -n "${ED_COURSE:-}" ]; then
+  EXTRA_ARGS+=("--course=${ED_COURSE}")
 fi
 
-python3 /app/cover.py "${TARGET_UNITS}" "${ED_PASSES}" ${EXTRA_ARGS}
+python3 /app/cover.py "${TARGET_UNITS}" "${ED_PASSES}" "${EXTRA_ARGS[@]}"
 RC=$?
 
 echo "=== cover.py finished with exit code ${RC} ==="

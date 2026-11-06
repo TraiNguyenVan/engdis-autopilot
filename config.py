@@ -57,6 +57,7 @@ REPORT_DIR: str = os.environ.get("ED_REPORT_DIR", ".")
 CRED_PATH: str = os.environ.get("ED_CRED", "/opt/data/.config/engdis/cred")
 DRY_RUN: bool = _get_bool("ED_DRY_RUN", False)
 CHROME_BIN: str = os.environ.get("CHROME_BIN", "chromium")
+ED_COURSE: str = os.environ.get("ED_COURSE", "")
 
 # OpenAI-compatible API Configuration
 OPENAI_BASE_URL: str = (

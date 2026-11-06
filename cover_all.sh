@@ -12,13 +12,15 @@ ARG2="${2:-}"
 ARG3="${3:-}"
 
 if [ -n "$ARG2" ] && [[ "$ARG1" =~ ^[0-9]+$ ]] && [[ "$ARG2" =~ ^[0-9]+$ ]] && [ -n "$ARG3" -o "$ARG1" != "$ARG2" ]; then
-  # Legacy syntax: FROM TO PASSES
+  # Legacy syntax: FROM TO PASSES [EXTRA...]
   UNIT_SPEC="${ARG1}-${ARG2}"
   PASSES="${ARG3:-1}"
+  shift 3 2>/dev/null || shift $# 2>/dev/null || true
 else
   UNIT_SPEC="${ARG1}"
   PASSES="${ARG2:-1}"
+  shift 2 2>/dev/null || shift $# 2>/dev/null || true
 fi
 
 echo "=== Running cover.py for units: ${UNIT_SPEC} (passes: ${PASSES}) ==="
-exec python3 cover.py "${UNIT_SPEC}" "${PASSES}"
+exec python3 cover.py "${UNIT_SPEC}" "${PASSES}" "$@"

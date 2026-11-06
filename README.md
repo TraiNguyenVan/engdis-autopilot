@@ -47,10 +47,12 @@ docker compose build
 ED_UNIT=8 ED_DRY_RUN=0 docker compose run --rm engdis
 ED_UNIT=8-9 ED_PASSES=1 ED_DRY_RUN=0 docker compose run --rm engdis
 ED_UNITS=7,8,9 ED_SKIP=Apologize ED_DRY_RUN=0 docker compose run --rm engdis
+ED_COURSE="Advanced 3" ED_UNIT=0 ED_DRY_RUN=0 docker compose run --rm engdis
 
 # Host CLI
 python3 cover.py 8-9 2
 python3 cover.py 8-9 2 --skip=Apologize
+python3 cover.py 0 1 --course="Advanced 3"
 ```
 
 ---

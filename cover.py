@@ -29,13 +29,135 @@ HOME_JS = """(() => {
   while (s && !s.unitsCtrl) s = s.$parent;
   if (!s) return {err:'no unitsCtrl'};
   const c = s.unitsCtrl;
-  return {units: (c.units||[]).map((u,i) => ({
-    i: i, name: u.Name, progress: u.Progress,
-    lessons: (u.Children||[]).map((l,j) => ({
-      j: j, name: l.Name, id: l.NodeId, progress: l.Progress, done: !!l.IsDone
+  let courseName = null;
+  let courseId = null;
+  const curCourse = localStorage.getItem('Course');
+  if (curCourse) {
+    try {
+      const p = JSON.parse(curCourse);
+      courseName = p.CourseName || p.Name;
+      courseId = p.CourseId || p.NodeId;
+    } catch(e) {}
+  }
+  return {
+    course: courseName,
+    courseId: courseId,
+    units: (c.units||[]).map((u,i) => ({
+      i: i, name: u.Name, progress: u.Progress,
+      lessons: (u.Children||[]).map((l,j) => ({
+        j: j, name: l.Name, id: l.NodeId, progress: l.Progress, done: !!l.IsDone
+      }))
     }))
-  }))};
+  };
 })()"""
+
+GET_COURSES_JS = """(() => {
+  const raw = localStorage.getItem('Courses');
+  if (!raw) return [];
+  try { return JSON.parse(raw); } catch(e) { return []; }
+})()"""
+
+SELECT_COURSE_JS = """((targetCourseId) => {
+  const curCourse = localStorage.getItem('Course');
+  if (curCourse) {
+    try {
+      const parsed = JSON.parse(curCourse);
+      if (Number(parsed.CourseId) === Number(targetCourseId)) {
+        return { switched: false, current: parsed.CourseName, id: parsed.CourseId };
+      }
+    } catch(e) {}
+  }
+  const carousel = document.querySelector('.home__courseCarouselSec') || document.querySelector('.home__courseCarouselW');
+  if (!carousel) return { err: 'no carousel' };
+  let s = angular.element(carousel).scope();
+  while (s && !s.bindSpecificCourse) s = s.$parent;
+  if (!s || !s.bindSpecificCourse) return { err: 'no bindSpecificCourse' };
+  s.bindSpecificCourse(targetCourseId);
+  return { switched: true, targetId: targetCourseId };
+})(%d)"""
+
+def match_course(target: str, available_courses: list[dict]) -> dict | None:
+    if not target or not available_courses:
+        return None
+    raw = str(target).strip()
+    if not raw:
+        return None
+
+    # 1. Exact CourseId match
+    for c in available_courses:
+        cid = str(c.get("CourseId") or c.get("id") or "")
+        if cid and cid == raw:
+            return c
+
+    # 2. Exact name match (case-insensitive)
+    for c in available_courses:
+        cname = str(c.get("courseName") or c.get("name") or "").strip()
+        if cname.lower() == raw.lower():
+            return c
+
+    # 3. Normalized alphanumeric match
+    def _norm(s):
+        import re
+        return re.sub(r"[^a-z0-9]", "", s.lower())
+
+    norm_target = _norm(raw)
+    for c in available_courses:
+        cname = str(c.get("courseName") or c.get("name") or "")
+        if _norm(cname) == norm_target:
+            return c
+
+    # 4. Common shorthands: "a3" -> "advanced3", "adv3" -> "advanced3"
+    shorthands = {
+        "a1": "advanced1", "adv1": "advanced1",
+        "a2": "advanced2", "adv2": "advanced2",
+        "a3": "advanced3", "adv3": "advanced3",
+        "i1": "intermediate1", "int1": "intermediate1",
+        "i2": "intermediate2", "int2": "intermediate2",
+        "i3": "intermediate3", "int3": "intermediate3",
+        "b3": "basic3"
+    }
+    expanded = shorthands.get(norm_target, norm_target)
+    for c in available_courses:
+        cname = str(c.get("courseName") or c.get("name") or "")
+        if _norm(cname) == expanded:
+            return c
+
+    # 5. Substring match
+    for c in available_courses:
+        cname = str(c.get("courseName") or c.get("name") or "")
+        if norm_target in _norm(cname):
+            return c
+
+    return None
+
+def ensure_course(t, target_course: str) -> dict | None:
+    if not target_course:
+        return None
+    t.goto(HOME)
+    poll.wait_until(
+        lambda: t.js("(() => document.querySelectorAll('.home__unitW').length > 0 || !!document.querySelector('.home__courseCarouselSec'))()"),
+        lambda v: bool(v), timeout=15.0, interval=0.3)
+    courses = t.js(GET_COURSES_JS)
+    if not courses or not isinstance(courses, list):
+        print("warning: could not read available courses from localStorage")
+        return None
+    matched = match_course(target_course, courses)
+    if not matched:
+        avail = [c.get("courseName") for c in courses if c.get("courseName")]
+        raise ValueError(f"Course '{target_course}' not found. Available courses: {avail}")
+
+    cid = matched.get("CourseId") or matched.get("id") or 0
+    cname = matched.get("courseName") or matched.get("name") or "unknown"
+    res = t.js(SELECT_COURSE_JS % int(cid))
+    if isinstance(res, dict) and res.get("switched"):
+        print(f"Switched course to: {cname} (ID: {cid})")
+        time.sleep(2.0)
+        poll.wait_until(
+            lambda: t.js("(() => document.querySelectorAll('.home__unitW').length > 0)()"),
+            lambda v: bool(v), timeout=15.0, interval=0.3)
+    else:
+        print(f"Course active: {cname} (ID: {cid})")
+    return matched
 
 GOTO_JS = """(() => {
   const w = document.querySelectorAll('.home__unitW');
@@ -170,11 +292,19 @@ def cover_unit(t, unit_i, passes=2, dry=False, skips=None):
         print(f"no home data or invalid unit index {unit_i}")
         return None
     unit = h["units"][unit_i]
+    c_prefix = f"[{h.get('course')}] " if h.get("course") else ""
     print(f"\n==========================================")
-    print(f"UNIT {unit_i}: {unit['name']} {pct(unit['progress'])} | {len(unit['lessons'])} lessons")
+    print(f"{c_prefix}UNIT {unit_i}: {unit['name']} {pct(unit['progress'])} | {len(unit['lessons'])} lessons")
     print(f"==========================================")
 
-    report = {"unit": unit["name"], "unit_index": unit_i, "lessons": {}, "passes": passes}
+    report = {
+        "course": h.get("course"),
+        "course_id": h.get("courseId"),
+        "unit": unit["name"],
+        "unit_index": unit_i,
+        "lessons": {},
+        "passes": passes
+    }
     blocked = set()
     for p in range(passes):
         if os.path.exists(os.path.join(HERE, "STOP")):
@@ -249,17 +379,33 @@ def main():
     dry = "--dry" in flags
     skips = [f.split("=", 1)[1] for f in flags if f.startswith("--skip=")]
 
+    target_course = None
+    for f in flags:
+        if f.startswith("--course="):
+            target_course = f.split("=", 1)[1]
+    if not target_course:
+        target_course = os.environ.get("ED_COURSE") or config.ED_COURSE
+
     t = edlib.tab()
     if not login.ensure_login(t):
         print("LOGIN-FAIL")
         return 4
+
+    if target_course:
+        try:
+            ensure_course(t, target_course)
+        except Exception as e:
+            print("COURSE-ERROR:", e)
+            return 8
+
     h = home_state(t)
     if not h.get("units"):
         print("no home data", h)
         return 2
 
+    c_info = f"[{h.get('course')}] " if h.get("course") else ""
     target_units = parse_unit_specs(raw_spec, total_units=len(h["units"]))
-    print(f"Target units: {target_units} (passes={passes}, dry={dry}, skips={skips})")
+    print(f"{c_info}Target units: {target_units} (passes={passes}, dry={dry}, skips={skips})")
 
     all_reports = []
     for u_idx in target_units:
