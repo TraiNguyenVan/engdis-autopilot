@@ -270,10 +270,8 @@ def main(max_iter=120):
             prev = None
             continue
 
-        # a task is loaded?
-        if s["counter"] is None:
-            # intro / reading / interact intro: play media then advance
-            # If step 1 (Explore) is already complete server-side, skip media replay
+        # Step 1: Explore handling (both intro pages with counter=None and audio tasks with counter="1")
+        if s["step"].startswith("Step 1"):
             STEP1_DONE_JS = """(() => {
                 const d = document.querySelectorAll('ed-la-dropdownlist')[1];
                 if (!d) return false;
@@ -282,12 +280,25 @@ def main(max_iter=120):
                 if (!ch || !ch[0]) return false;
                 return Number(ch[0].Progress || 0) >= 0.999 || !!ch[0].IsDone;
             })()"""
-            if s["step"].startswith("Step 1") and t.js(STEP1_DONE_JS):
-                print("-- explore already done; advancing directly", flush=True)
-                advance(t)
+            if t.js(STEP1_DONE_JS):
+                print("-- explore already done; advancing to practice", flush=True)
+                if not advance(t):
+                    solver.set_step(t, 1)
                 prev = None
                 continue
 
+            poll.wait_until(
+                lambda: q(t, "return [...document.querySelectorAll('audio,video')].some(x=>(x.currentSrc||x.src))?1:0;"),
+                lambda v: v == 1, timeout=16.0, interval=0.25)
+            played = solver.play_media(t, timeout=45)
+            print(f"-- intro (media={'y' if played else 'n'})", flush=True)
+            if not advance(t):
+                solver.set_step(t, 1)
+            prev = None
+            continue
+
+        # intro / reading / interact intro on non-explore steps
+        if s["counter"] is None:
             poll.wait_until(
                 lambda: q(t, "return [...document.querySelectorAll('audio,video')].some(x=>(x.currentSrc||x.src))?1:0;"),
                 lambda v: v == 1, timeout=16.0, interval=0.25)
