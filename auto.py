@@ -5,6 +5,9 @@ Usage: python3 auto.py [max_iterations]
 import json, os, sys, time
 
 import edlib, login, poll, solver
+from diag_logger import DiagnosticLogger
+
+diag = DiagnosticLogger(log_dir="logs_diag")
 
 PORT = 9225
 
