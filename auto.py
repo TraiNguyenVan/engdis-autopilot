@@ -120,6 +120,17 @@ def handle_test(t, src):
                 src = "[TRANSCRIPT]\n" + tr + "\n\n" + src
                 print("test transcript", key, len(tr))
     out = solver.do_task(t, src)
+    # unanswered question (render race or a failed click) would silently score 0:
+    # retry once before the caller advances to the next question
+    if out.startswith("other:") or (
+        q(t, "return document.querySelector('.prMCQ__qaSet')?1:0;")
+        and not q(t, "return document.querySelectorAll('.prMCQ__answers--checked').length;")
+    ):
+        time.sleep(1.5)
+        retry = solver.do_task(t, src)
+        if not retry.startswith("other:"):
+            out = retry
+        print("test retry", str(retry)[:60], flush=True)
     poll.wait_until(
         lambda: q(t, "return [...document.querySelectorAll('a,button,input')].some(e=>/^Check answer$/i.test((e.innerText||e.value||'').trim()))?1:0;"),
         lambda v: v == 1, timeout=3.0, interval=0.12)

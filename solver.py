@@ -456,6 +456,21 @@ def solve_fitb(t, src=""):
 
 
 def do_task(t, src):
+    # A test question renders a beat after the counter updates; classifying too
+    # early returns 'other', and the caller then advances to the next question
+    # with this one unanswered (scores ~0% and the submit dialog complains).
+    for _ in range(40):
+        ready = t.js("""(() => (document.querySelector('.prMCQ__qaSet')
+          || document.querySelector('.prOpenEnded__qaItemText')
+          || document.querySelector('.DDLOptions__selected')
+          || document.querySelector('.lessonMultipleAnswer')
+          || document.querySelector('.dnditem')
+          || document.querySelector('.TTpanswerDiv')
+          || (window.tinymce && tinymce.activeEditor && tinymce.activeEditor.initialized))
+          ? 1 : 0)()""")
+        if ready:
+            break
+        time.sleep(0.25)
     kind = t.js("""(() => {
       if(window.tinymce && tinymce.activeEditor && tinymce.activeEditor.initialized && document.querySelector('.mce-edit-area, iframe[id$=_ifr]')) return 'writing';
       if(document.querySelector('.prOpenEnded__qaItemText')) return 'open';
