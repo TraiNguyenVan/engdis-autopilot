@@ -6,9 +6,10 @@ All parameters are configured via environment variables and can be supplied via 
 
 | Variable | Default | Purpose |
 | :--- | :--- | :--- |
-| `ED_UNIT` | `0` | Course unit to process (`0` for all units) |
-| `ED_PASSES` | `1` | Number of execution passes |
+| `ED_UNIT` / `ED_UNITS` | `0` | Course unit(s) to process. Accepts single (`8`), range (`8-9`, `8..9`), list (`7,8,9`), or `all`. |
+| `ED_PASSES` | `1` | Number of execution passes per unit (default: `1` in Docker, `2` on CLI) |
 | `ED_DRY_RUN` | `1` | `1` or `true` for dry-run simulation mode |
+| `ED_SKIP` | *(empty)* | Case-insensitive substring filter to skip matching lessons (e.g. `Apologize`, `Speech`) |
 | `ED_CDP_PORT` | `9225` | Chrome remote debugging port |
 | `OPENAI_BASE_URL` | `https://api.openai.com/v1` | OpenAI-compatible endpoint URL |
 | `OPENAI_API_KEY` | *(empty)* | API key / token for LLM calls |
