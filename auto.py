@@ -164,6 +164,7 @@ def main(max_iter=120):
     prev = None
     stuck = 0
     speak_tries = {}
+    adv_tries = {}
     media_done = set()
     unit_lock = ""
     lesson_lock = ""
@@ -204,6 +205,37 @@ def main(max_iter=120):
             print(f"== {lesson} / {s['step']}")
 
         solver.neutralize(t)
+
+        # Practice already recorded server-side but the app still renders the last
+        # activity (or nothing). Re-solving it is pure waste: drops report "ok",
+        # nothing advances, and the run never reaches the Test step. If the step's
+        # own Progress is 1, just click through to the next step.
+        EMPTY_PRACTICE_JS = ("""const p=document.querySelector('#pmContainer');
+              const w=document.querySelectorAll('.prMCQ__qaSet,.lessonMultipleAnswer,.dnditem,.TTpanswerDiv,.draggable,.dndZone,.wordBankTile').length;
+              return (!w && p && p.innerHTML.length < 50) ? 1 : 0;""")
+        WIDGETS_JS = ("""const n=document.querySelectorAll('.prMCQ__qaSet,.lessonMultipleAnswer,.dnditem,.TTpanswerDiv,.draggable,.dndZone,.wordBankTile').length;
+              return n ? 1 : 0;""")
+        STEP_PROGRESS_JS = """(() => {const d=document.querySelectorAll('ed-la-dropdownlist')[1];
+              if(!d) return null; const c=ng.probe(d).componentInstance;
+              const o=c && c.dropDownListObj; const n=o && (o.SelectedNode || (o.Children||[])[o.SelectedIndex]);
+              return n ? Number(n.Progress) : null;})()"""
+        if s["step"].startswith("Step 2"):
+            if q(t, EMPTY_PRACTICE_JS):
+                poll.wait_until(lambda: q(t, WIDGETS_JS), lambda v: v == 1,
+                                timeout=6.0, interval=0.25)
+            sp = t.js(STEP_PROGRESS_JS)
+            skipped = (not isinstance(sp, bool)) and isinstance(sp, (int, float)) and sp >= 0.999
+            if skipped:
+                key = (s["lesson"], s["step"], s["counter"])
+                adv = adv_tries.get(key, 0) + 1
+                adv_tries[key] = adv
+                print(f"-- practice done (progress={sp}); advancing [{adv}/3]")
+                if adv > 3:
+                    print("STEP-BLOCKED", key)
+                    sys.exit(7)
+                advance(t)
+                prev = None
+                continue
 
         # test entry screen
         if s["step"].startswith("Step 3") and s["counter"] is None and q(t, "return document.querySelector('.btnStartTest')?1:0;"):
