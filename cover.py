@@ -14,7 +14,7 @@ import threading
 import sys
 import time
 
-import edlib, login
+import edlib, login, poll
 import config
 
 HOME = "https://ed22.engdis.com/ptithcm#/home"
@@ -55,21 +55,32 @@ GOTO_JS = """(() => {
 
 def home_state(t):
     t.goto(HOME)
-    time.sleep(6)
+    poll.wait_until(
+        lambda: t.js("(() => document.querySelectorAll('.home__unitW').length > 0)()"),
+        lambda v: bool(v), timeout=15.0, interval=0.3)
     for _ in range(6):
         d = t.js(HOME_JS)
         if isinstance(d, dict) and d.get("units"):
             return d
-        time.sleep(3)
+        time.sleep(1.5)
     return {}
 
 
 def goto_lesson(t, unit_i, lesson_j):
     t.goto(HOME)
-    time.sleep(5)
-    r = t.js(GOTO_JS % (unit_i, lesson_j))
-    time.sleep(10)
-    return r
+    poll.wait_until(
+        lambda: t.js("(() => document.querySelectorAll('.home__unitW').length > 0)()"),
+        lambda v: bool(v), timeout=15.0, interval=0.3)
+    res = 'no units'
+    for _ in range(5):
+        res = t.js(GOTO_JS % (unit_i, lesson_j))
+        if isinstance(res, str) and res.startswith('ok'):
+            break
+        time.sleep(1.5)
+    poll.wait_until(
+        lambda: t.js("(() => location.href.includes('learningArea') && document.querySelectorAll('ed-la-dropdownlist').length >= 2)()"),
+        lambda v: bool(v), timeout=15.0, interval=0.3)
+    return res
 
 
 def run_lesson(lesson_name, max_iter=90):

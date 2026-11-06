@@ -16,7 +16,7 @@ def transcribe(path, prompt):
             headers["Authorization"] = "Bearer " + KEY
         req = urllib.request.Request(URL, data=json.dumps(payload).encode(), headers=headers)
         try:
-            r = urllib.request.urlopen(req, timeout=300)
+            r = urllib.request.urlopen(req, timeout=60)
         except Exception as e:
             print(f"[{m}] {e}", file=sys.stderr)
             continue

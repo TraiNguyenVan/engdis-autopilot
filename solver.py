@@ -29,7 +29,7 @@ def ask(prompt, audio_b64=None, max_tokens=800):
         try:
             req = urllib.request.Request(LLM_URL, data=json.dumps(payload).encode(),
                                         headers=headers)
-            body = urllib.request.urlopen(req, timeout=180).read().decode()
+            body = urllib.request.urlopen(req, timeout=25).read().decode()
         except Exception as e:
             last = e
             print("! llm %s: %s" % (model, str(e)[:140]), flush=True)

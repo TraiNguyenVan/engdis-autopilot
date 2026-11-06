@@ -24,7 +24,7 @@ def st(t):
         "counter": t.js("""(() => {const c=document.querySelector('.learning__taskNavPCCurrentTask'); return c? c.innerText.trim(): null;})()"""),
         "total": t.js("""(() => {const c=document.querySelector('.learning__taskNavPCTotalTasks'); return c? c.innerText.trim(): null;})()"""),
         "body": t.js("(() => document.body.innerText.slice(0,600))()"),
-        "unit": t.js("""(() => {const ls=(document.body.innerText||'').split(String.fromCharCode(10)); const m=ls.find(x=>x.trim().startsWith('Unit ')); return m?(m.trim().split(':')[0]||'').trim():'';})()"""),
+        "unit": t.js("""(() => {const m = (document.body.innerText||'').match(/Unit\\s+\\d+/i); return m ? m[0].replace(/\\s+/, ' ') : '';})()"""),
     }
 
 
@@ -273,12 +273,27 @@ def main(max_iter=120):
         # a task is loaded?
         if s["counter"] is None:
             # intro / reading / interact intro: play media then advance
+            # If step 1 (Explore) is already complete server-side, skip media replay
+            STEP1_DONE_JS = """(() => {
+                const d = document.querySelectorAll('ed-la-dropdownlist')[1];
+                if (!d) return false;
+                const c = ng.probe(d)?.componentInstance;
+                const ch = c?.dropDownListObj?.Children;
+                if (!ch || !ch[0]) return false;
+                return Number(ch[0].Progress || 0) >= 0.999 || !!ch[0].IsDone;
+            })()"""
+            if s["step"].startswith("Step 1") and t.js(STEP1_DONE_JS):
+                print("-- explore already done; advancing directly", flush=True)
+                advance(t)
+                prev = None
+                continue
+
             poll.wait_until(
                 lambda: q(t, "return [...document.querySelectorAll('audio,video')].some(x=>(x.currentSrc||x.src))?1:0;"),
                 lambda v: v == 1, timeout=16.0, interval=0.25)
             played = solver.play_media(t, timeout=45)
             advance(t)
-            print(f"-- intro (media={'y' if played else 'n'})")
+            print(f"-- intro (media={'y' if played else 'n'})", flush=True)
             prev = None
             continue
 
@@ -307,15 +322,12 @@ def main(max_iter=120):
                   if(a.includes('Start')) return 'speak';
                   return 'other';
                 })()""")
-                if sig not in media_done and q(t, """return [...document.querySelectorAll('audio,video')].filter(x=>(x.currentSrc||x.src)).length;"""):
-                    media_done.add(sig)
-                    solver.play_media(t, timeout=70)
                 if kind == "speak":
                     out = handle_speaking(t, src)
                     sk = ("speak", s["lesson"], s["step"], s["counter"])
                     speak_tries[sk] = speak_tries.get(sk, 0) + 1
                     if speak_tries[sk] >= 3:
-                        print("SPEAK-BLOCKED", sk)
+                        print("SPEAK-BLOCKED", sk, flush=True)
                         sys.exit(3)
                 elif kind in ("mcq", "multi", "drag", "write"):
                     out = solver.do_task(t, src)
@@ -329,7 +341,7 @@ def main(max_iter=120):
                     if out.startswith("other:"):
                         out = "other: " + s["body"][:80].replace("\n", " ")
 
-        print(f"[{s['counter']}/{s['total']}] {str(out)[:100]}")
+        print(f"[{s['counter']}/{s['total']}] {str(out)[:100]}", flush=True)
         advance(t)
 
 
