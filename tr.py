@@ -1,7 +1,7 @@
 import base64, json, os, sys, urllib.request
 import config
 
-MODELS = ["ag/gemini-3.8-flash", "gemini/gemini-3.6-flash", "gemini/gemini-3.5-flash-lite"]
+MODELS = ["ag/gemini-3.8-flash", "ag/claude-sonnet-5-5-low", "gemini/gemini-3.6-flash"]
 URL = config.LLM_URL
 KEY = os.environ.get("NINEROUTER_API_KEY", "")
 

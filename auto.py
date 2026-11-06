@@ -24,7 +24,7 @@ def st(t):
         "counter": t.js("""(() => {const c=document.querySelector('.learning__taskNavPCCurrentTask'); return c? c.innerText.trim(): null;})()"""),
         "total": t.js("""(() => {const c=document.querySelector('.learning__taskNavPCTotalTasks'); return c? c.innerText.trim(): null;})()"""),
         "body": t.js("(() => document.body.innerText.slice(0,600))()"),
-        "unit": t.js("""(() => {const ls=(document.body.innerText||'').split(String.fromCharCode(10)); const m=ls.find(x=>x.trim().startsWith('Unit ')); return m?m.trim():'';})()"""),
+        "unit": t.js("""(() => {const ls=(document.body.innerText||'').split(String.fromCharCode(10)); const m=ls.find(x=>x.trim().startsWith('Unit ')); return m?(m.trim().split(':')[0]||'').trim():'';})()"""),
     }
 
 

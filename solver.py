@@ -10,7 +10,13 @@ import config
 
 LLM_URL = config.LLM_URL
 LLM_KEY = os.environ.get("NINEROUTER_API_KEY", "")
-LLM_MODELS = ["ag/gemini-3.8-flash"]
+LLM_MODELS = [
+    "ag/gemini-3.8-flash",
+    "ag/claude-sonnet-5-5-low",
+    "ag/gpt-oss-120b-medium",
+    "ag/gemini-3.7-flash-low",
+    "gemini/gemini-3.6-flash",
+]
 SCRATCH = config.SCRATCH
 
 

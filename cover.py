@@ -20,7 +20,7 @@ import config
 HOME = "https://ed22.engdis.com/ptithcm#/home"
 HERE = os.path.dirname(os.path.abspath(__file__))
 REPORT_DIR = config.REPORT_DIR
-PER_LESSON_TIMEOUT = int(os.environ.get("ED_LESSON_TIMEOUT", "1000"))
+PER_LESSON_TIMEOUT = int(os.environ.get("ED_LESSON_TIMEOUT", "450"))
 
 HOME_JS = """(() => {
   const w = document.querySelectorAll('.home__unitW');
@@ -74,7 +74,7 @@ def goto_lesson(t, unit_i, lesson_j):
 
 def run_lesson(lesson_name, max_iter=90):
     """Run auto.py once; bounded, never raises."""
-    cmd = [sys.executable, "auto.py", str(max_iter)]
+    cmd = [sys.executable, "-u", "auto.py", str(max_iter)]
     started = time.time()
     os.makedirs(os.path.join(HERE, "logs"), exist_ok=True)
     safe = "".join(c if c.isalnum() or c in " -_" else "_" for c in lesson_name).strip()
