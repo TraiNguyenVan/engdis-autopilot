@@ -172,7 +172,7 @@ def main(max_iter=120):
             print("UNIT-CHANGED", unit_lock, "->", s["unit"])
             sys.exit(4)
         # bounced back to the dashboard: no lesson open, nothing to solve
-        if not s.get("lesson") and "All Units" in (s.get("body") or ""):
+        if not s.get("lesson") and t.js("(() => !document.querySelector('ed-la-dropdownlist') && !!document.querySelector('.home__unitW'))()"):
             print("NO-LESSON (dashboard) — open a lesson first")
             sys.exit(6)
         if s.get("lesson") and not lesson_lock:
