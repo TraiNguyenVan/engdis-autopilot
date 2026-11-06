@@ -209,15 +209,37 @@ def solve_multi(t, src):
     return "multi: " + ", ".join(items[i - 1]["t"][:30] for i in idx)
 
 
-def solve_drag(t, src):
-    jso(t, "document.body.style.zoom='0.8'; return 1;")
-    time.sleep(1)
+def _drag_snapshot(t):
     zones = t.js("""(() => [...document.querySelectorAll('.dndZone')].map(z=>({n:z.getAttribute('dg_name'), items:[...z.querySelectorAll('.dnditem')].map(x=>x.innerText.trim())})))()""")
     bank = t.js("""(() => {const b=[...document.querySelectorAll('.dndZone')].find(z=>z.getAttribute('dg_name')==='TTpTablePlaceHolder');
       return b? [...b.querySelectorAll('.dnditem')].map(x=>x.innerText.trim()):[];})()""")
+    return zones, bank
+
+
+def solve_drag(t, src):
+    jso(t, "document.body.style.zoom='0.8'; return 1;")
+    time.sleep(1)
+    zones, bank = _drag_snapshot(t)
     target_zones = [z for z in zones if z["n"] != "TTpTablePlaceHolder"]
     if target_zones and all(z["items"] for z in target_zones):
-        return "drag: already"
+        # Filled zones are NOT proof the app recorded the answer: a failed drop,
+        # a reload, or a previous run leaves items sitting in the zones while the
+        # server still gates progress. Returning early here wedged progress at
+        # that task forever (silent STUCK). Clear back to the bank and re-answer.
+        print("-- drag: zones pre-filled; clearing and re-dropping")
+        for z in target_zones:
+            for item_text in z["items"]:
+                rr = edlib.rects(t)
+                it = next((i for i in rr["items"] if i["t"].strip() == item_text.strip()), None)
+                bz = next((zz for zz in rr["zones"] if zz["n"] == "TTpTablePlaceHolder"), None)
+                if not it or not bz:
+                    continue
+                t.drag_xy(it["cx"], it["cy"], bz["cx"], bz["cy"])
+                time.sleep(0.5)
+        zones, bank = _drag_snapshot(t)
+        target_zones = [z for z in zones if z["n"] != "TTpTablePlaceHolder"]
+        if target_zones and all(z["items"] for z in target_zones):
+            return "drag: already"
     prompt = t.js("""(() => {const p=document.querySelector('ed-la-practicearea'); return p? p.innerText.slice(0,2500):'';})()""")
     a_lines = [f"{i}. [{z['n']}] {z['items'][0] if z['items'] else '(empty)'}" for i, z in enumerate(target_zones)]
     q = (f"SOURCE MATERIAL:\n{src}\n\nEXERCISE TEXT:\n{prompt}\n\n"
