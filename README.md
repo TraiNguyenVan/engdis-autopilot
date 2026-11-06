@@ -31,6 +31,14 @@ All parameters are configured via environment variables (defined in `config.py`)
 | `ED_SCRATCH` | `/data/cache` | Scratch directory for TTS audio and temp files |
 | `ED_REPORT_DIR` | `/data/reports` | Directory where JSON run reports are written |
 
+## LLM & Audio Transcription
+
+The harness uses a unified OpenAI-compatible endpoint for both text problem solving and audio transcription:
+
+- **No separate speech-to-text API required**: You do **not** need a Groq, Whisper, or Deepgram API key. Audio clips from listening exercises are base64-encoded and sent directly via `input_audio` chat completions.
+- **Model requirements**: For units containing listening comprehension tasks, set `OPENAI_MODEL` to a multimodal model that accepts audio input (e.g. Gemini 2.0/1.5 Flash via proxy, `gpt-4o-audio-preview`, or any OpenAI-compatible provider supporting audio).
+- **Fallback chain**: `OPENAI_MODEL` supports comma-separated models (e.g. `primary-model,backup-model`). The solver automatically falls back to subsequent models if an API call fails.
+
 ## Authentication & Credentials Setup
 
 The harness supports two ways to provide course login credentials:
