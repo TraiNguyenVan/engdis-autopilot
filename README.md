@@ -74,3 +74,11 @@ python3 -m unittest discover tests
 # Inside container
 docker run --rm --entrypoint python3 engdis-autopilot:test -m unittest discover tests
 ```
+
+## Safety & Ethics
+
+Please review [SAFETY.md](SAFETY.md) and [SECURITY.md](SECURITY.md) before deploying. This tool is designed for educational accessibility, CDP instrumentation research, and automated courseware regression testing. Ensure compliance with your institution's honor code and terms of service.
+
+## License
+
+[MIT License](LICENSE) © 2026 Nguyễn Văn Trãi

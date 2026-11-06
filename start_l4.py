@@ -13,9 +13,14 @@ for _ in range(10):
     time.sleep(1)
 
 # Fill login
-x.js("document.querySelector('input[name=username]').value = 'username'")
-x.js("document.querySelector('input[name=password]').value = 'password'")
-x.js("document.querySelector('button[type=submit]').click()")
+from login import creds
+user, pwd = creds()
+if user and pwd:
+    x.js(f"document.querySelector('input[name=username]').value = '{user}'")
+    x.js(f"document.querySelector('input[name=password]').value = '{pwd}'")
+    x.js("document.querySelector('button[type=submit]').click()")
+else:
+    print("No credentials found")
 time.sleep(6)
 
 # Check logged in
