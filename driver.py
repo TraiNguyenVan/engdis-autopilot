@@ -9,6 +9,7 @@ class Tab:
         self.ws = connect(ws_url, max_size=50_000_000, open_timeout=20, ping_interval=None, close_timeout=5)
         self.ids = itertools.count(1)
         self.dialogs = []
+        self.events = []
 
     def send(self, method, timeout=60, **params):
         try:
@@ -61,6 +62,11 @@ class Tab:
                 if "error" in msg:
                     raise RuntimeError(f"{method}: {msg['error']}")
                 return msg.get("result", {})
+            if msg.get("method", "").startswith("Network."):
+                # keep a bounded trace so callers can read real status codes
+                self.events.append(msg)
+                if len(self.events) > 4000:
+                    del self.events[:2000]
         raise TimeoutError(method)
 
     def js(self, expr):

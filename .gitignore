@@ -14,3 +14,6 @@ auth*.json
 m_*.mp3
 net_dump.json
 __pycache__/
+
+net_calls*.json
+netprobe.out
