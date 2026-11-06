@@ -144,6 +144,7 @@ def main(max_iter=120):
     prev = None
     stuck = 0
     speak_tries = {}
+    media_done = set()
     unit_lock = ""
     lesson_lock = ""
     for _ in range(max_iter):
@@ -220,7 +221,8 @@ def main(max_iter=120):
                   if(a.includes('Start')) return 'speak';
                   return 'other';
                 })()""")
-                if kind != "speak" and q(t, """return [...document.querySelectorAll('audio,video')].filter(x=>(x.currentSrc||x.src)).length;"""):
+                if sig not in media_done and q(t, """return [...document.querySelectorAll('audio,video')].filter(x=>(x.currentSrc||x.src)).length;"""):
+                    media_done.add(sig)
                     solver.play_media(t, timeout=70)
                 if kind == "speak":
                     out = handle_speaking(t, src)
