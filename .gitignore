@@ -22,6 +22,11 @@ logs_diag/
 # python cache
 __pycache__/
 
+# local environment configs
+.env
+.env.*
+!.env.example
+
 # runtime state and reports
 cover_report*.json
 live_status.json

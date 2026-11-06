@@ -2,6 +2,28 @@ import os
 from typing import List
 
 
+def _load_dotenv(path: str = ".env") -> None:
+    """Load key-value pairs from .env if present into os.environ without overwriting."""
+    if os.environ.get("ED_SKIP_DOTENV") == "1" or not os.path.exists(path):
+        return
+    try:
+        with open(path, "r", encoding="utf-8") as f:
+            for line in f:
+                line = line.strip()
+                if not line or line.startswith("#") or "=" not in line:
+                    continue
+                k, v = line.split("=", 1)
+                k = k.strip()
+                v = v.strip().strip("'\"")
+                if k and k not in os.environ:
+                    os.environ[k] = v
+    except Exception:
+        pass
+
+
+_load_dotenv()
+
+
 def _get_int(key: str, default: int) -> int:
     val = os.environ.get(key)
     if val is None or val.strip() == "":
