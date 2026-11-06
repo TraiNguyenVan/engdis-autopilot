@@ -249,29 +249,25 @@ def main(max_iter=120):
               if(!d) return null; const c=ng.probe(d).componentInstance;
               const o=c && c.dropDownListObj; const n=o && (o.SelectedNode || (o.Children||[])[o.SelectedIndex]);
               return n ? Number(n.Progress) : null;})()"""
-        if s["step"].startswith("Step 2"):
-            if q(t, EMPTY_PRACTICE_JS):
-                poll.wait_until(lambda: q(t, WIDGETS_JS), lambda v: v == 1,
-                                timeout=6.0, interval=0.25)
-            sp = t.js(STEP_PROGRESS_JS)
-            skipped = (not isinstance(sp, bool)) and isinstance(sp, (int, float)) and sp >= 0.999
-            if skipped:
-                key = (s["lesson"], s["step"], s["counter"])
-                adv = adv_tries.get(key, 0) + 1
-                adv_tries[key] = adv
-                print(f"-- practice done (progress={sp}); advancing to test [{adv}/3]")
-                if not advance(t) or adv > 2:
-                    solver.set_step(t, 2)
-                    time.sleep(1.0)
-                if adv > 4:
-                    print(f"STEP-SWITCH-STUCK ({s['lesson']}) — returning to home to clear lock")
-                    t.goto("https://ed22.engdis.com/ptithcm#/home", wait=4)
-                    adv_tries.clear()
-                prev = None
-                continue
+        sp = t.js(STEP_PROGRESS_JS)
+        skipped = (not isinstance(sp, bool)) and isinstance(sp, (int, float)) and sp >= 0.999
+        if skipped:
+            key = (s["lesson"], s["step"], s["counter"])
+            adv = adv_tries.get(key, 0) + 1
+            adv_tries[key] = adv
+            print(f"-- step done (progress={sp}); advancing [{adv}/3]")
+            if not advance(t) or adv > 1:
+                solver.set_next_step(t)
+                time.sleep(1.0)
+            if adv > 4:
+                print(f"STEP-SWITCH-STUCK ({s['lesson']}) — returning to home to clear lock")
+                t.goto("https://ed22.engdis.com/ptithcm#/home", wait=4)
+                adv_tries.clear()
+            prev = None
+            continue
 
         # test entry screen
-        if s["step"].startswith("Step 3") and s["counter"] is None and q(t, "return document.querySelector('.btnStartTest')?1:0;"):
+        if q(t, "return document.querySelector('.btnStartTest')?1:0;"):
             click(t, ".btnStartTest")
             print("test started")
             poll.wait_until(
@@ -280,45 +276,29 @@ def main(max_iter=120):
             prev = None
             continue
 
-        # Step 1: Explore handling (both intro pages with counter=None and audio tasks with counter="1")
-        if s["step"].startswith("Step 1"):
-            STEP1_DONE_JS = """(() => {
-                const d = document.querySelectorAll('ed-la-dropdownlist')[1];
-                if (!d) return false;
-                const c = ng.probe(d)?.componentInstance;
-                const ch = c?.dropDownListObj?.Children;
-                if (!ch || !ch[0]) return false;
-                return Number(ch[0].Progress || 0) >= 0.999 || !!ch[0].IsDone;
-            })()"""
-            if t.js(STEP1_DONE_JS):
-                print("-- explore already done; advancing to practice", flush=True)
-                if not advance(t):
-                    solver.set_step(t, 1)
-                prev = None
-                continue
-
+        # intro / reading / interact intro on pages without counter
+        if s["counter"] is None:
             poll.wait_until(
                 lambda: q(t, "return [...document.querySelectorAll('audio,video')].some(x=>(x.currentSrc||x.src))?1:0;"),
                 lambda v: v == 1, timeout=16.0, interval=0.25)
             played = solver.play_media(t, timeout=45)
             print(f"-- intro (media={'y' if played else 'n'})", flush=True)
             if not advance(t):
-                solver.set_step(t, 1)
+                solver.set_next_step(t)
             prev = None
             continue
 
-        # intro / reading / interact intro on non-explore steps
-        if s["counter"] is None:
-            poll.wait_until(
-                lambda: q(t, "return [...document.querySelectorAll('audio,video')].some(x=>(x.currentSrc||x.src))?1:0;"),
-                lambda v: v == 1, timeout=16.0, interval=0.25)
-            played = solver.play_media(t, timeout=45)
-            advance(t)
-            print(f"-- intro (media={'y' if played else 'n'})", flush=True)
-            prev = None
-            continue
+        is_test = t.js("""(() => {
+            const app = ng.probe(document.querySelector('app'))?.componentInstance;
+            if (app?.isTestEnv) return true;
+            if (typeof app?.isStepTest === 'function' && app.isStepTest()) return true;
+            if (document.querySelector('.learning__submitTestLink')) return true;
+            const nav = app?.navigationService;
+            const name = nav?._stepsList?.SelectedNode?.Name || '';
+            return name.toLowerCase() === 'test' || /test|review/i.test(document.querySelector('.learning__dropDownListTitle')?.innerText || '');
+        })()""")
 
-        if s["step"].startswith("Step 3"):
+        if is_test:
             out = handle_test(t, src)
         else:
             br = handle_branch(t, src)
@@ -363,7 +343,9 @@ def main(max_iter=120):
                         out = "other: " + s["body"][:80].replace("\n", " ")
 
         print(f"[{s['counter']}/{s['total']}] {str(out)[:100]}", flush=True)
-        advance(t)
+        if not advance(t):
+            if s.get("counter") and s.get("total") and s["counter"] == s["total"]:
+                solver.set_next_step(t)
 
 
 if __name__ == "__main__":

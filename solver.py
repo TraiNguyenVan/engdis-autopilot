@@ -545,23 +545,38 @@ def next_task(t):
 
 
 def set_step(t, index):
-    """Switch step via the dropdown component API (index 0-based)."""
-    return jso(t, f"""(() => {{
-      const d = document.querySelectorAll('ed-la-dropdownlist')[1];
-      if (!d) return 'no dd';
-      const c = ng.probe(d).componentInstance;
-      if (!c) return 'no comp';
-      document.querySelectorAll('.learning__dropDownListTitleW--steps').forEach(e => {{
-        e.classList.remove('learning__dropDownListTitleW--disabled');
-      }});
-      c.selectedListItemIndex = -1;
-      const k = c.dropDownListObj && c.dropDownListObj.Children && c.dropDownListObj.Children[{index}];
-      if (!k) return 'no child';
-      c.selectListItem({{preventDefault(){{}}}}, k.NodeId, false, {index + 1});
-      const items = Array.from(d.querySelectorAll('.learning__dropDownList_item'));
-      if (items[{index}]) items[{index}].click();
-      return k.Name;
+    """Switch step via the Angular navigationService (index 0-based)."""
+    return t.js(f"""(() => {{
+      const app = ng.probe(document.querySelector('app'))?.componentInstance;
+      const nav = app?.navigationService;
+      if (!nav || !nav._stepsList || !nav._stepsList.Children) return 'no nav';
+      const k = nav._stepsList.Children[{index}];
+      if (!k) return 'no step ' + {index};
+      nav.selectedChanged({{
+        nodeId: k.NodeId,
+        courseNodeType: 4,
+        selectedIndex: {index}
+      }}, true, false);
+      return k.Name + ' (' + k.NodeId + ')';
     }})()""")
+
+
+def set_next_step(t):
+    """Advance to the next step via the Angular navigationService."""
+    return t.js("""(() => {
+      const app = ng.probe(document.querySelector('app'))?.componentInstance;
+      const nav = app?.navigationService;
+      if (!nav || !nav._stepsList || !nav._stepsList.Children) return 'no nav';
+      const cur = nav._stepsList.SelectedIndex;
+      if (cur < 0 || cur + 1 >= nav._stepsList.Children.length) return 'last step';
+      const k = nav._stepsList.Children[cur + 1];
+      nav.selectedChanged({
+        nodeId: k.NodeId,
+        courseNodeType: 4,
+        selectedIndex: cur + 1
+      }, true, false);
+      return k.Name + ' (' + k.NodeId + ')';
+    })()""")
 
 
 def start_test(t):
