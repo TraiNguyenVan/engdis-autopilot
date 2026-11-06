@@ -29,6 +29,39 @@ All parameters are configured via environment variables (defined in `config.py`)
 | `ED_SCRATCH` | `/data/cache` | Scratch directory for TTS audio and temp files |
 | `ED_REPORT_DIR` | `/data/reports` | Directory where JSON run reports are written |
 
+## Authentication & Credentials Setup
+
+The harness supports two ways to provide course login credentials:
+
+### Option A: Credentials File (Recommended)
+
+Create a 2-line file containing your username and password:
+
+```bash
+mkdir -p ~/.config/engdis
+cat << 'EOF' > ~/.config/engdis/cred
+your_student_id_or_username
+your_password
+EOF
+chmod 600 ~/.config/engdis/cred
+```
+
+Point `ED_CRED` to this file path if using a custom location:
+```bash
+export ED_CRED="$HOME/.config/engdis/cred"
+```
+
+### Option B: Environment Variables
+
+Set credentials directly in your environment:
+
+```bash
+export ED_USER="your_student_id_or_username"
+export ED_PASS="your_password"
+```
+
+In Docker Compose, mount your credentials file into `/run/secrets/engdis_cred` or pass `ED_CRED_FILE=/path/to/cred`.
+
 ## Quickstart
 
 ### 1. Build Image
