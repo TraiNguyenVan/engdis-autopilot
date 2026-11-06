@@ -4,7 +4,7 @@ Usage: python3 auto.py [max_iterations]
 """
 import json, os, sys, time
 
-import edlib, solver
+import edlib, login, solver
 
 PORT = 9225
 
@@ -139,6 +139,9 @@ def handle_test(t, src):
 
 def main(max_iter=120):
     t = edlib.tab()
+    if not login.ensure_login(t):
+        print("LOGIN-FAIL")
+        sys.exit(4)
     src = ""
     lesson = None
     prev = None
@@ -149,6 +152,14 @@ def main(max_iter=120):
     lesson_lock = ""
     for _ in range(max_iter):
         s = st(t)
+        if "Member Login" in (s.get("body") or ""):
+            print("session dropped, relogging")
+            if not login.ensure_login(t):
+                print("LOGIN-FAIL")
+                sys.exit(4)
+            unit_lock = lesson_lock = ""
+            prev = None
+            continue
         if not unit_lock:
             unit_lock = s.get("unit") or ""
         elif s.get("unit") and s["unit"] != unit_lock:

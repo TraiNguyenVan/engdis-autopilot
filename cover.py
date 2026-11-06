@@ -14,7 +14,7 @@ import threading
 import sys
 import time
 
-import edlib
+import edlib, login
 
 HOME = "https://ed22.engdis.com/ptithcm#/home"
 HERE = os.path.dirname(os.path.abspath(__file__))
@@ -127,6 +127,9 @@ def main():
             passes = int(a.split("=")[1])
 
     t = edlib.tab()
+    if not login.ensure_login(t):
+        print("LOGIN-FAIL")
+        return 4
     h = home_state(t)
     if not h.get("units"):
         print("no home data", h)

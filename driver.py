@@ -1,21 +1,25 @@
 """Minimal CDP driver over websockets for a locally launched Chromium."""
 import json, itertools, time, urllib.request
 from websockets.sync.client import connect
+from websockets.exceptions import ConnectionClosed
 
 class Tab:
     def __init__(self, ws_url):
         self.url = ws_url
         self.ws = connect(ws_url, max_size=50_000_000, open_timeout=20, ping_interval=None, close_timeout=5)
         self.ids = itertools.count(1)
+        self.dialogs = []
 
     def send(self, method, timeout=60, **params):
         try:
             return self._send(method, timeout, params)
-        except Exception as e:
-            if "closed" in str(e).lower() or "keepalive" in str(e).lower() or "1011" in str(e):
-                self.reconnect()
-                return self._send(method, timeout, params)
-            raise
+        except (ConnectionClosed, OSError):
+            self.reconnect()
+            return self._send(method, timeout, params)
+        except TimeoutError:
+            # a dead socket looks like a timeout: recv never returns
+            self.reconnect()
+            return self._send(method, timeout, params)
 
     def reconnect(self):
         url = self.url
@@ -38,7 +42,20 @@ class Tab:
             self.ws.socket.settimeout(max(0.1, end - time.time()))
             try:
                 msg = json.loads(self.ws.recv(timeout=max(0.1, end - time.time())))
+            except ConnectionClosed:
+                raise
             except Exception:
+                continue
+            if msg.get("method") == "Page.javascriptDialogOpening":
+                # a native alert/confirm blocks the renderer until handled:
+                # every later evaluate would hang. Always auto-accept.
+                self.dialogs.append(msg.get("params", {}).get("message", ""))
+                try:
+                    j = next(self.ids)
+                    self.ws.send(json.dumps({"id": j, "method": "Page.handleJavaScriptDialog",
+                                             "params": {"accept": True}}))
+                except Exception:
+                    pass
                 continue
             if msg.get("id") == i:
                 if "error" in msg:
