@@ -31,7 +31,10 @@ _LOGGED_JS = """(() => {
   if (location.href.indexOf('#/login') >= 0) return 0;
   const b = document.body ? (document.body.innerText || '') : '';
   if (/Member Login/.test(b) && !/Hello /.test(b)) return 0;
-  return /Hello /.test(b) || !!document.querySelector('.home__unitW') ? 1 : 0;
+  if (/Hello /.test(b) || document.querySelector('.home__unitW')) return 1;
+  // #/home still rendering: session is alive (a dead session bounces to #/login)
+  if (location.href.indexOf('#/home') >= 0 && b.length > 120) return 1;
+  return 0;
 })()"""
 
 
@@ -113,6 +116,11 @@ def login(t, force=False):
             break
         time.sleep(1)
     else:
+        # No form means the SPA is still authenticated and bounced us home;
+        # that is success, not a login failure.
+        if logged_in(t):
+            print("login: ok (no form — session already live)")
+            return True
         print("login: no form on page (%s)" % t.js("location.href"))
         return False
 
