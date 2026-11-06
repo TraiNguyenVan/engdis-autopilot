@@ -42,53 +42,16 @@ docker compose build
 
 ### 3. Run
 
-Run via Docker Compose (recommended) or host CLI:
-
-#### Docker Compose
 ```bash
-# Dry run (simulation only, no task mutations)
-ED_UNIT=8-9 ED_PASSES=1 ED_DRY_RUN=1 docker compose run --rm engdis
-
-# Live execution for a single unit or multi-unit range
-ED_UNIT=8 ED_PASSES=2 ED_DRY_RUN=0 docker compose run --rm engdis
+# Docker Compose (single unit, range, or list; 0-based index)
+ED_UNIT=8 ED_DRY_RUN=0 docker compose run --rm engdis
 ED_UNIT=8-9 ED_PASSES=1 ED_DRY_RUN=0 docker compose run --rm engdis
-ED_UNITS=7,8,9 ED_DRY_RUN=0 docker compose run --rm engdis
-ED_UNIT=all ED_DRY_RUN=0 docker compose run --rm engdis
+ED_UNITS=7,8,9 ED_SKIP=Apologize ED_DRY_RUN=0 docker compose run --rm engdis
 
-# Optional: skip specific lessons (e.g. speech tasks)
-ED_UNIT=7 ED_SKIP=Apologize ED_DRY_RUN=0 docker compose run --rm engdis
-```
-
-#### Host CLI
-```bash
-# Unit specifications support ranges (8-9, 8..9), lists (7,8,9), 'all', or single numbers (0-indexed)
+# Host CLI
 python3 cover.py 8-9 2
 python3 cover.py 8-9 2 --skip=Apologize
-python3 cover.py all 1 --dry
-
-# Or via shell wrapper
-./cover_all.sh 8-9 2
-./cover_all.sh 8 9 2
 ```
-
----
-
-## Unit Index Reference
-
-Course units are 0-indexed:
-
-| Index | Unit Name | Typical Gating / Notes |
-| :---: | :--- | :--- |
-| `0` | Unit 1: Telling The Truth | Core foundation |
-| `1` | Unit 2: Business Careers | Drag & drop ordering |
-| `2` | Unit 3: Agreeing And Disagreeing | Listening & grammar |
-| `3` | Unit 4: Too Much Work | Sequence matching |
-| `4` | Unit 5: People With Problems | Logical connectors |
-| `5` | Unit 6: Tell Me About it | Request & review |
-| `6` | Unit 7: Economics | Adjectives & finance |
-| `7` | Unit 8: Interviews | Career & writing tasks |
-| `8` | Unit 9: Artificial Intelligence | AI reading & comprehension |
-| `9` | Unit 10: Space Exploration | Exploration reading & test |
 
 ---
 
