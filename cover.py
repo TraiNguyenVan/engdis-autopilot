@@ -18,7 +18,7 @@ import edlib
 
 HOME = "https://ed22.engdis.com/ptithcm#/home"
 HERE = os.path.dirname(os.path.abspath(__file__))
-PER_LESSON_TIMEOUT = 1500
+PER_LESSON_TIMEOUT = int(os.environ.get("ED_LESSON_TIMEOUT", "1000"))
 
 HOME_JS = """(() => {
   const w = document.querySelectorAll('.home__unitW');
@@ -82,7 +82,8 @@ def run_lesson(lesson_name, max_iter=90):
         with open(lp, "a") as lf:
             lf.write("\n=== %s %s\n" % (time.strftime("%H:%M:%S"), lesson_name))
             lf.flush()
-            p = subprocess.Popen(cmd, cwd=HERE, stdout=subprocess.PIPE,
+            env = dict(os.environ, ED_LESSON_LOCK="1")
+            p = subprocess.Popen(cmd, cwd=HERE, stdout=subprocess.PIPE, env=env,
                                  stderr=subprocess.STDOUT, text=True, bufsize=1)
             killer = threading.Timer(PER_LESSON_TIMEOUT, p.kill)
             killer.start()
@@ -134,11 +135,13 @@ def main():
     print(f"UNIT {unit_i}: {unit['name']} {pct(unit['progress'])} | {len(unit['lessons'])} lessons")
 
     report = {"unit": unit["name"], "lessons": {}, "passes": passes}
+    blocked = set()
     for p in range(passes):
         h = home_state(t)
         unit = h["units"][unit_i]
         todo = [l for l in unit["lessons"] if _num(l["progress"]) < 0.999
-                and not any(k.lower() in (l["name"] or "").lower() for k in skips)]
+                and not any(k.lower() in (l["name"] or "").lower() for k in skips)
+                and l["name"] not in blocked]
         if not todo:
             print("all lessons complete")
             break
@@ -154,8 +157,14 @@ def main():
                 continue
             rc, tail, dur = run_lesson(l["name"])
             print(f"   rc={rc} {dur}s | " + " / ".join(tail[-2:]), flush=True)
+            if rc == 5:
+                print("   lesson finished (lesson-lock exit)", flush=True)
+            if rc == 3:
+                blocked.add(l["name"])
+                print("   SPEAK-BLOCKED -> skip this lesson in later passes", flush=True)
             report["lessons"][l["name"]] = {"rc": rc, "dur": dur, "tail": tail,
-                                            "start_progress": l["progress"]}
+                                            "start_progress": l["progress"],
+                                            "blocked": l["name"] in blocked}
         if dry:
             break
 
@@ -166,9 +175,12 @@ def main():
         print(f"  {l['name']}: {pct(l['progress'])}")
         report["lessons"].setdefault(l["name"], {})["final"] = l["progress"]
     report["unit_progress"] = unit["progress"]
+    rname = "cover_report_u%d.json" % unit_i
+    with open(os.path.join(HERE, rname), "w") as f:
+        json.dump(report, f, indent=1)
     with open(os.path.join(HERE, "cover_report.json"), "w") as f:
         json.dump(report, f, indent=1)
-    print("report: cover_report.json")
+    print("report:", rname)
     return 0
 
 

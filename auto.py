@@ -145,6 +145,7 @@ def main(max_iter=120):
     stuck = 0
     speak_tries = {}
     unit_lock = ""
+    lesson_lock = ""
     for _ in range(max_iter):
         s = st(t)
         if not unit_lock:
@@ -152,6 +153,11 @@ def main(max_iter=120):
         elif s.get("unit") and s["unit"] != unit_lock:
             print("UNIT-CHANGED", unit_lock, "->", s["unit"])
             sys.exit(4)
+        if s.get("lesson") and not lesson_lock:
+            lesson_lock = s["lesson"]
+        elif s.get("lesson") and lesson_lock and s["lesson"] != lesson_lock and os.environ.get("ED_LESSON_LOCK") == "1":
+            print("LESSON-CHANGED", lesson_lock, "->", s["lesson"])
+            sys.exit(5)
         sig = (s["lesson"], s["step"], s["counter"])
         stuck = stuck + 1 if sig == prev else 0
         prev = sig
@@ -201,9 +207,6 @@ def main(max_iter=120):
                     if ready:
                         break
                     time.sleep(1.5)
-                media = q(t, """return [...document.querySelectorAll('audio,video')].filter(x=>(x.currentSrc||x.src)).length;""")
-                if media:
-                    solver.play_media(t, timeout=70)
                 kind = t.js("""(() => {
                   if(document.querySelectorAll('a.chooseCaracterArrow').length) return 'speak';
                   // speaking tasks also render options; text sniff must win over mcq/multi
@@ -217,6 +220,8 @@ def main(max_iter=120):
                   if(a.includes('Start')) return 'speak';
                   return 'other';
                 })()""")
+                if kind != "speak" and q(t, """return [...document.querySelectorAll('audio,video')].filter(x=>(x.currentSrc||x.src)).length;"""):
+                    solver.play_media(t, timeout=70)
                 if kind == "speak":
                     out = handle_speaking(t, src)
                     sk = ("speak", s["lesson"], s["step"], s["counter"])
