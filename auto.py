@@ -160,8 +160,9 @@ def handle_test(t, src):
     sub = q(t, "return document.querySelector('.learning__submitTestLink')?1:0;")
     if sub and total and counter == total:
         click(t, ".learning__submitTestLink")
+        t.js("const a=document.querySelector('.learning__submitTestLink'); if(a) angular.element(a).triggerHandler('click');")
         poll.wait_until(
-            lambda: q(t, "return document.querySelector('iframe#colorBoxIframe')?1:0;"),
+            lambda: q(t, "return (document.querySelector('iframe#colorBoxIframe') || document.querySelector('#colorbox') || document.querySelector('.modal'))?1:0;"),
             lambda v: v == 1, timeout=8.0, interval=0.2)
         t.js("""(() => {const f=[...document.querySelectorAll('iframe#colorBoxIframe')].pop();
           if(f && f.contentDocument) {
@@ -320,8 +321,21 @@ def main(max_iter=120):
                 nxt = solver.set_next_step(t)
                 print(f"-- fallback next step: {nxt}", flush=True)
                 if nxt == 'last step':
-                    print("Last step with no counter — lesson complete")
-                    return
+                    # Only complete lesson if current step is indeed done or test submitted
+                    check_done = t.js("""(() => {
+                        const dd1 = document.querySelectorAll('ed-la-dropdownlist')[1];
+                        const comp = ng.probe(dd1)?.componentInstance;
+                        const listObj = comp?.dropDownListObj;
+                        if (!listObj || !listObj.Children) return false;
+                        const cur = (comp?.selectedListItemIndex || 1) - 1;
+                        const node = listObj.Children[cur];
+                        return node ? (node.Progress >= 0.999 || node.IsDone) : false;
+                    })()""")
+                    if check_done:
+                        print("Last step with no counter — lesson complete")
+                        return
+                    else:
+                        print("Reached 'last step' but step is not done, staying to solve")
             prev = None
             time.sleep(1.0)
             continue

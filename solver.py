@@ -561,8 +561,18 @@ def next_task(t):
 
 
 def set_step(t, index):
-    """Switch step via the Angular navigationService (index 0-based)."""
+    """Switch step via ed-la-dropdownlist component or navigationService (index 0-based)."""
     return t.js(f"""(() => {{
+      const dd1 = document.querySelectorAll('ed-la-dropdownlist')[1];
+      const comp = ng.probe(dd1)?.componentInstance;
+      const listObj = comp?.dropDownListObj;
+      if (comp && listObj && listObj.Children && listObj.Children[{index}]) {{
+        const target = listObj.Children[{index}];
+        try {{
+          comp.selectListItem({{preventDefault(){{}}}}, target.NodeId, false, {index} + 1);
+          return target.Name + ' (' + target.NodeId + ') via comp';
+        }} catch(e) {{}}
+      }}
       const app = ng.probe(document.querySelector('app'))?.componentInstance;
       const nav = app?.navigationService;
       if (!nav || !nav._stepsList || !nav._stepsList.Children) return 'no nav';
@@ -578,30 +588,46 @@ def set_step(t, index):
 
 
 def set_next_step(t):
-    """Advance to the next step via the Angular navigationService."""
+    """Advance to the next step via ed-la-dropdownlist component or navigationService."""
     return t.js("""(() => {
+      const dd1 = document.querySelectorAll('ed-la-dropdownlist')[1];
+      const comp = ng.probe(dd1)?.componentInstance;
+      const listObj = comp?.dropDownListObj;
+      
+      let cur = -1;
+      if (comp && typeof comp.selectedListItemIndex === 'number' && comp.selectedListItemIndex > 0) {
+        cur = comp.selectedListItemIndex - 1;
+      }
+      if (cur < 0 && listObj && typeof listObj.SelectedIndex === 'number') {
+        cur = listObj.SelectedIndex;
+      }
+      
       const app = ng.probe(document.querySelector('app'))?.componentInstance;
       const nav = app?.navigationService;
-      if (!nav || !nav._stepsList || !nav._stepsList.Children) return 'no nav';
-      let cur = nav._stepsList.SelectedIndex;
-      if (cur === undefined || cur < 0) {
-        const sel = nav._stepsList.SelectedNode;
-        if (sel) cur = nav._stepsList.Children.findIndex(x => x.NodeId === sel.NodeId);
-      }
-      if (cur === undefined || cur < 0) {
-        const d = document.querySelectorAll('ed-la-dropdownlist')[1];
-        const dt = (d?.innerText || '').toLowerCase();
-        cur = nav._stepsList.Children.findIndex(x => dt.includes((x.Name || '').toLowerCase()));
-      }
+      const totalSteps = (listObj && listObj.Children ? listObj.Children.length : 0) || (nav && nav._stepsList && nav._stepsList.Children ? nav._stepsList.Children.length : 0);
+      
       if (cur < 0) cur = 0;
-      if (cur + 1 >= nav._stepsList.Children.length) return 'last step';
-      const k = nav._stepsList.Children[cur + 1];
-      nav.selectedChanged({
-        nodeId: k.NodeId,
-        courseNodeType: 4,
-        selectedIndex: cur + 1
-      }, true, false);
-      return k.Name + ' (' + k.NodeId + ')';
+      if (totalSteps > 0 && cur + 1 >= totalSteps) return 'last step';
+      
+      const nextIdx = cur + 1;
+      if (comp && listObj && listObj.Children && listObj.Children[nextIdx]) {
+        const target = listObj.Children[nextIdx];
+        try {
+          comp.selectListItem({preventDefault(){}}, target.NodeId, false, nextIdx + 1);
+          return (target.Name || 'step') + ' (' + target.NodeId + ') via comp';
+        } catch(e) {}
+      }
+      
+      if (nav && nav._stepsList && nav._stepsList.Children && nav._stepsList.Children[nextIdx]) {
+        const k = nav._stepsList.Children[nextIdx];
+        nav.selectedChanged({
+          nodeId: k.NodeId,
+          courseNodeType: 4,
+          selectedIndex: nextIdx
+        }, true, false);
+        return (k.Name || 'step') + ' (' + k.NodeId + ')';
+      }
+      return 'cannot advance step';
     })()""")
 
 
