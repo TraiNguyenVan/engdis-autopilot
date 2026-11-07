@@ -297,7 +297,8 @@ def main(max_iter=120):
             print("test started")
             poll.wait_until(
                 lambda: q(t, "const e=document.querySelector('.learning__taskNavPCCurrentTask'); return e?e.innerText.trim():null;"),
-                lambda v: v is not None, timeout=10.0, interval=0.25)
+                lambda v: v is not None, timeout=12.0, interval=0.25)
+            prev = None
             continue
 
         # intro / reading / interact intro on pages without counter
@@ -307,6 +308,7 @@ def main(max_iter=120):
                 print("-- interact speaker selection")
                 t.js("(() => {const a=document.querySelectorAll('a.chooseCaracterArrow'); if(a.length) a[0].click(); return 1;})()")
                 time.sleep(2.0)
+                prev = None
                 continue
 
             poll.wait_until(
@@ -314,13 +316,13 @@ def main(max_iter=120):
                 lambda v: v == 1, timeout=3.0, interval=0.25)
             played = solver.play_media(t, timeout=45, quick=True)
             print(f"-- intro (media={'y' if played else 'n'})", flush=True)
-            nxt = solver.set_next_step(t)
-            print(f"-- next step: {nxt}", flush=True)
-            if nxt == 'last step':
-                print("Last step with no counter — lesson complete")
-                return
-            elif nxt == 'no nav':
-                advance(t)
+            if not advance(t):
+                nxt = solver.set_next_step(t)
+                print(f"-- fallback next step: {nxt}", flush=True)
+                if nxt == 'last step':
+                    print("Last step with no counter — lesson complete")
+                    return
+            prev = None
             time.sleep(1.0)
             continue
 

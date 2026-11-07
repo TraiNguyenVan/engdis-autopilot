@@ -583,8 +583,18 @@ def set_next_step(t):
       const app = ng.probe(document.querySelector('app'))?.componentInstance;
       const nav = app?.navigationService;
       if (!nav || !nav._stepsList || !nav._stepsList.Children) return 'no nav';
-      const cur = nav._stepsList.SelectedIndex;
-      if (cur < 0 || cur + 1 >= nav._stepsList.Children.length) return 'last step';
+      let cur = nav._stepsList.SelectedIndex;
+      if (cur === undefined || cur < 0) {
+        const sel = nav._stepsList.SelectedNode;
+        if (sel) cur = nav._stepsList.Children.findIndex(x => x.NodeId === sel.NodeId);
+      }
+      if (cur === undefined || cur < 0) {
+        const d = document.querySelectorAll('ed-la-dropdownlist')[1];
+        const dt = (d?.innerText || '').toLowerCase();
+        cur = nav._stepsList.Children.findIndex(x => dt.includes((x.Name || '').toLowerCase()));
+      }
+      if (cur < 0) cur = 0;
+      if (cur + 1 >= nav._stepsList.Children.length) return 'last step';
       const k = nav._stepsList.Children[cur + 1];
       nav.selectedChanged({
         nodeId: k.NodeId,

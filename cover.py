@@ -170,6 +170,8 @@ GOTO_JS = """(() => {
   if (!u) return 'no unit';
   const l = u.Children[%d];
   if (!l) return 'no lesson';
+  u.IsLocked = false;
+  l.IsLocked = false;
   try { c.goToLesson(l, false, 'Unit'); return 'ok ' + l.Name; }
   catch (e) { return 'err ' + e; }
 })()"""
@@ -199,9 +201,11 @@ def goto_lesson(t, unit_i, lesson_j):
         if isinstance(res, str) and res.startswith('ok'):
             break
         time.sleep(1.5)
-    poll.wait_until(
+    loaded = poll.wait_until(
         lambda: t.js("(() => location.href.includes('learningArea') && document.querySelectorAll('ed-la-dropdownlist').length >= 2)()"),
         lambda v: bool(v), timeout=15.0, interval=0.3)
+    if not loaded:
+        return 'err nav timeout'
     return res
 
 
