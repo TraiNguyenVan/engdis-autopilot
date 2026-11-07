@@ -510,6 +510,22 @@ def solve_fitb(t, src=""):
     return "fitb: " + " ".join(out)
 
 
+def solve_select_text(t, src):
+    prompt = t.js("(() => (document.querySelector('.learning__taskInstruction, .prSelectText__instruction')?.innerText || document.body.innerText.slice(0, 500)))()")
+    spans = t.js("(() => [...document.querySelectorAll('.learning__selectTxt_st, span.st')].map((e, idx) => ({idx: idx, text: e.innerText.trim()})))()")
+    if not spans:
+        return "select_text: no spans"
+    q = (f"SOURCE MATERIAL:\n{src}\n\nINSTRUCTION:\n{prompt}\n\nCANDIDATE SENTENCES:\n" +
+         "\n".join(f"{s['idx']}. {s['text']}" for s in spans) +
+         '\n\nPick the 0-based index of the sentence that matches the instruction. Reply {"index": <int>}.')
+    r = ask_json(q, max_tokens=100) or {}
+    idx = r.get("index", 0)
+    if not isinstance(idx, int) or idx < 0 or idx >= len(spans):
+        idx = 0
+    t.js(f"(() => {{ const els = document.querySelectorAll('.learning__selectTxt_st, span.st'); if(els[{idx}]) els[{idx}].click(); return 1; }})()")
+    return f"select_text: picked {idx} ({spans[idx]['text'][:30]})"
+
+
 def do_task(t, src):
     # A test question renders a beat after the counter updates; classifying too
     # early returns 'other', and the caller then advances to the next question
@@ -521,6 +537,7 @@ def do_task(t, src):
           || document.querySelector('.lessonMultipleAnswer')
           || document.querySelector('.dnditem')
           || document.querySelector('.TTpanswerDiv')
+          || document.querySelector('.learning__selectTxt_st, span.st')
           || (window.tinymce && tinymce.activeEditor && tinymce.activeEditor.initialized))
           ? 1 : 0)()""")
         if ready:
@@ -535,6 +552,7 @@ def do_task(t, src):
       if(document.querySelectorAll('.dnditem').length && document.querySelectorAll('.dndZone').length) return 'drag';
       if(document.querySelectorAll('.TTpanswerDiv').length && document.querySelectorAll('.draggable').length) return 'lcloze';
       if(document.querySelectorAll('.draggable.wordBankTile').length && document.querySelectorAll('.dndZone').length) return 'cloze';
+      if(document.querySelectorAll('.learning__selectTxt_st, span.st').length) return 'select_text';
       return 'other';
     })()""")
     if kind == "mcq":
@@ -551,6 +569,8 @@ def do_task(t, src):
         return solve_fitb(t, src)
     if kind == "open":
         return solve_openended(t, src)
+    if kind == "select_text":
+        return solve_select_text(t, src)
     if kind == "writing":
         return solve_writing(t, src, task_text(t))
     return "other: " + (task_text(t)[:60].replace("\n", " "))
