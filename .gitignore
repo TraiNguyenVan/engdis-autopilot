@@ -32,3 +32,10 @@ cover_report*.json
 live_status.json
 STOP
 .hermes/
+reports/
+
+# transcripts and scratch dumps
+transcript*.txt
+tr_*.txt
+t_*.txt
+*.out

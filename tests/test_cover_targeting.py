@@ -39,6 +39,28 @@ class TestCoverTargeting(unittest.TestCase):
         self.assertEqual(len(filtered), 1)
         self.assertEqual(filtered[0]["name"], "Wedding Plans")
 
+    def test_parse_unit_specs(self):
+        # Single unit
+        self.assertEqual(cover.parse_unit_specs("5"), [5])
+        # Range with hyphen
+        self.assertEqual(cover.parse_unit_specs("5-9"), [5, 6, 7, 8, 9])
+        # Range with dots
+        self.assertEqual(cover.parse_unit_specs("1..3"), [1, 2, 3])
+        # List with commas and semicolons
+        self.assertEqual(cover.parse_unit_specs("0, 2; 4"), [0, 2, 4])
+        # Mixed list and range
+        self.assertEqual(cover.parse_unit_specs("0, 2-4, 6"), [0, 2, 3, 4, 6])
+        # All
+        self.assertEqual(cover.parse_unit_specs("all", total_units=5), [0, 1, 2, 3, 4])
+        # Defaults
+        self.assertEqual(cover.parse_unit_specs(""), [0])
+        self.assertEqual(cover.parse_unit_specs(None), [0])
+        # Invalid spec or out of bounds
+        with self.assertRaises(ValueError):
+            cover.parse_unit_specs("abc")
+        with self.assertRaises(ValueError):
+            cover.parse_unit_specs("12-15", total_units=10)
+
 
 if __name__ == "__main__":
     unittest.main()

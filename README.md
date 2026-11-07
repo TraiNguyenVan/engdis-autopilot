@@ -53,6 +53,8 @@ ED_COURSE="Advanced 3" ED_UNIT=0 ED_DRY_RUN=0 docker compose run --rm engdis
 python3 cover.py 8-9 2
 python3 cover.py 8-9 2 --skip=Apologize
 python3 cover.py 0 1 --course="Advanced 3"
+python3 cover.py 1 1 --course="Advanced 3" --lesson="IFL Broadcast"
+python3 cover.py 1 1 --course="Advanced 3" --test-only
 ```
 
 ---
@@ -66,7 +68,8 @@ python3 cover.py 0 1 --course="Advanced 3"
 ├── solver.py              # Multimodal LLM prompt builder and answer extractor
 ├── driver.py              # CDP connection, tab control, and network instrumentation
 ├── login.py               # Authentication handler and session recovery
-├── tr.py / asr.py         # Audio extraction and base64 transcription client
+├── asr.py                 # Audio extraction and base64 transcription client
+├── poll.py                # Predicate polling and backoff utilities
 ├── bootstrap_browser.py   # Headless Chromium launcher with CDP health polling
 ├── compose.yaml           # Container definition with resource limits
 ├── Dockerfile             # Debian Bookworm container image with Chromium & FFmpeg
@@ -75,6 +78,8 @@ python3 cover.py 0 1 --course="Advanced 3"
 │   ├── authentication.md  # Credential setup & secret mounting
 │   ├── configuration.md   # Complete environment variable reference
 │   └── dashboard.md       # Diagnostic dashboard setup
+├── tools/
+│   └── spikes/            # Archived exploratory spikes and reverse-engineering probes
 └── tests/                 # Unit and container test suite
 ```
 
