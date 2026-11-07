@@ -237,6 +237,7 @@ def main(max_iter=120):
     media_done = set()
     unit_lock = ""
     lesson_lock = ""
+    target_step_jumped = False
     for _ in range(max_iter):
         s = st(t)
         if "Member Login" in (s.get("body") or ""):
@@ -266,13 +267,42 @@ def main(max_iter=120):
         stuck = stuck + 1 if sig == prev else 0
         prev = sig
         if stuck >= 4:
-            print("STUCK", sig, "|", s["body"][:120].replace("\n", " "))
+            ts = time.strftime("%Y%m%d_%H%M%S")
+            safe_lesson = "".join(c if c.isalnum() else "_" for c in (s.get("lesson") or "unknown"))
+            fix_dir = os.environ.get("ED_FIXTURE_DIR") or "/data/logs/fixtures"
+            try:
+                os.makedirs(fix_dir, exist_ok=True)
+            except Exception:
+                fix_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "logs", "fixtures")
+            fix_path = os.path.join(fix_dir, f"stuck_{safe_lesson}_{s.get('counter') or 0}_{ts}.json")
+            dumped = solver.dump_task(t, fix_path, meta={"lesson": s.get("lesson"), "step": s.get("step"), "counter": s.get("counter")})
+            print(f"STUCK {sig} (dumped: {dumped}) | {s['body'][:120].replace(chr(10), ' ')}")
             return
         if s["lesson"] != lesson:
             lesson = s["lesson"]
             d = solver.source_text(t)
             src = (d["resource"] or "") + "\n" + d["body"]
             print(f"== {lesson} / {s['step']}")
+
+        target_step_name = os.environ.get("ED_TARGET_STEP")
+        if target_step_name and not target_step_jumped:
+            target_step_jumped = True
+            cur_step = (s.get("step") or "").lower()
+            if target_step_name.lower() not in cur_step:
+                find_step_js = f"""(() => {{
+                  const dd1 = document.querySelectorAll('ed-la-dropdownlist')[1];
+                  const comp = dd1 ? window.ng?.probe?.(dd1)?.componentInstance : null;
+                  const children = comp?.dropDownListObj?.Children || [];
+                  const idx = children.findIndex(c => (c.Name || '').toLowerCase().includes('{target_step_name.lower()}'));
+                  return idx;
+                }})()"""
+                step_idx = t.js(find_step_js)
+                if isinstance(step_idx, int) and step_idx >= 0:
+                    print(f"-- fast-forward to target step: {target_step_name} (index {step_idx})")
+                    solver.set_step(t, step_idx)
+                    time.sleep(1.5)
+                    prev = None
+                    continue
 
         solver.neutralize(t)
 

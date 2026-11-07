@@ -821,5 +821,41 @@ def main(max_tasks=200):
         neutralize(t)
 
 
+DUMP_TASK_JS = """(() => {
+  const practiceArea = document.querySelector('ed-la-practicearea') || document.querySelector('#pmContainer') || document.body;
+  let practiceData = null;
+  try {
+    const probe = window.ng?.probe?.(document.querySelector('ed-la-practicearea'));
+    practiceData = probe?.componentInstance?.practiceData || probe?.componentInstance?.itemInfo || null;
+  } catch(e) {}
+  return {
+    html: practiceArea ? practiceArea.innerHTML : '',
+    practiceData: practiceData,
+    body: (document.body?.innerText || '').trim(),
+    url: window.location.href
+  };
+})()"""
+
+
+def dump_task(t, out_path: str, meta: dict | None = None) -> str:
+    """Dump current task DOM and angular metadata to a JSON fixture for offline debugging."""
+    try:
+        os.makedirs(os.path.dirname(os.path.abspath(out_path)), exist_ok=True)
+        raw = t.js(DUMP_TASK_JS) or {}
+        payload = {
+            "meta": meta or {},
+            "html": raw.get("html", ""),
+            "practiceData": raw.get("practiceData"),
+            "body": raw.get("body", ""),
+            "url": raw.get("url", ""),
+            "timestamp": time.time()
+        }
+        with open(out_path, "w", encoding="utf-8") as f:
+            json.dump(payload, f, indent=2, ensure_ascii=False)
+        return out_path
+    except Exception as e:
+        return f"dump-err: {e}"
+
+
 if __name__ == "__main__":
     main(int(sys.argv[1]) if len(sys.argv) > 1 else 200)

@@ -134,6 +134,17 @@ def match_course(target: str, available_courses: list[dict]) -> dict | None:
 def ensure_course(t, target_course: str) -> dict | None:
     if not target_course:
         return None
+    # Fast-check if already on target course
+    cur_raw = t.js("(() => localStorage.getItem('Course'))()")
+    if cur_raw:
+        try:
+            cur = json.loads(cur_raw)
+            cname = cur.get("CourseName") or cur.get("Name") or ""
+            cid = cur.get("CourseId") or cur.get("NodeId") or 0
+            if match_course(target_course, [{"CourseId": cid, "courseName": cname}]):
+                return {"CourseId": cid, "courseName": cname}
+        except Exception:
+            pass
     t.goto(HOME)
     poll.wait_until(
         lambda: t.js("(() => document.querySelectorAll('.home__unitW').length > 0 || !!document.querySelector('.home__courseCarouselSec'))()"),
@@ -210,7 +221,7 @@ def goto_lesson(t, unit_i, lesson_j):
     return res
 
 
-def run_lesson(lesson_name, max_iter=90):
+def run_lesson(lesson_name, max_iter=90, extra_env: dict | None = None):
     """Run auto.py once; bounded, never raises."""
     cmd = [sys.executable, "-u", "auto.py", str(max_iter)]
     started = time.time()
@@ -226,6 +237,8 @@ def run_lesson(lesson_name, max_iter=90):
                 lf.flush()
             log(f"start lesson={lesson_name!r} max_iter={max_iter}")
             env = dict(os.environ, ED_LESSON_LOCK="1")
+            if extra_env:
+                env.update(extra_env)
             p = subprocess.Popen(cmd, cwd=HERE, stdout=subprocess.PIPE, env=env,
                                  stderr=subprocess.STDOUT, text=True, bufsize=1)
             timed_out = threading.Event()
@@ -302,7 +315,29 @@ def parse_unit_specs(spec, total_units=10):
     return valid
 
 
-def cover_unit(t, unit_i, passes=2, dry=False, skips=None, target_course=None):
+def filter_lessons(lessons: list[dict], lesson_spec: str | None = None, test_only: bool = False, skips: list[str] | None = None) -> list[dict]:
+    skips = [s.lower() for s in (skips or [])]
+    filtered = []
+    for l in lessons:
+        name = l.get("name") or ""
+        j = l.get("j", 0)
+        p = _num(l.get("progress"))
+        if any(k in name.lower() for k in skips):
+            continue
+        if test_only and (p < 0.60 or p >= 0.999):
+            continue
+        if lesson_spec is not None:
+            raw = str(lesson_spec).strip()
+            if raw.isdigit() and int(raw) != j:
+                continue
+            elif not raw.isdigit() and raw.lower() not in name.lower():
+                continue
+        filtered.append(l)
+    return filtered
+
+
+def cover_unit(t, unit_i, passes=2, dry=False, skips=None, target_course=None,
+               lesson_spec=None, test_only=False, target_step=None):
     skips = skips or []
     if target_course:
         try:
@@ -339,9 +374,8 @@ def cover_unit(t, unit_i, passes=2, dry=False, skips=None, target_course=None):
                 print(f"warning: ensure_course pass {p} failed: {e}")
         h = home_state(t)
         unit = h["units"][unit_i]
-        todo = [l for l in unit["lessons"] if _num(l["progress"]) < 0.999
-                and not any(k.lower() in (l["name"] or "").lower() for k in skips)
-                and l["name"] not in blocked]
+        unblocked = [l for l in unit["lessons"] if _num(l["progress"]) < 0.999 and l["name"] not in blocked]
+        todo = filter_lessons(unblocked, lesson_spec=lesson_spec, test_only=test_only, skips=skips)
         if not todo:
             print("all lessons complete")
             break
@@ -358,7 +392,12 @@ def cover_unit(t, unit_i, passes=2, dry=False, skips=None, target_course=None):
                 print("   nav failed:", nav)
                 report["lessons"][l["name"]] = {"nav": str(nav)}
                 continue
-            rc, tail, dur = run_lesson(l["name"])
+            extra_env = {}
+            if target_step:
+                extra_env["ED_TARGET_STEP"] = target_step
+            elif test_only:
+                extra_env["ED_TARGET_STEP"] = "Test"
+            rc, tail, dur = run_lesson(l["name"], extra_env=extra_env if extra_env else None)
             print(f"   rc={rc} {dur}s | " + " / ".join(tail[-2:]), flush=True)
             if rc == 5:
                 print("   lesson finished (lesson-lock exit)", flush=True)
@@ -405,6 +444,9 @@ def main():
             passes = int(f.split("=", 1)[1])
     dry = "--dry" in flags
     skips = [f.split("=", 1)[1] for f in flags if f.startswith("--skip=")]
+    lesson_spec = next((f.split("=", 1)[1] for f in flags if f.startswith("--lesson=")), None)
+    target_step = next((f.split("=", 1)[1] for f in flags if f.startswith("--step=")), None)
+    test_only = "--test-only" in flags
 
     target_course = None
     for f in flags:
@@ -432,14 +474,15 @@ def main():
 
     c_info = f"[{h.get('course')}] " if h.get("course") else ""
     target_units = parse_unit_specs(raw_spec, total_units=len(h["units"]))
-    print(f"{c_info}Target units: {target_units} (passes={passes}, dry={dry}, skips={skips})")
+    print(f"{c_info}Target units: {target_units} (passes={passes}, dry={dry}, skips={skips}, lesson={lesson_spec}, test_only={test_only}, step={target_step})")
 
     all_reports = []
     for u_idx in target_units:
         if os.path.exists(os.path.join(HERE, "STOP")):
             print("STOP file present, stopping multi-unit walk")
             break
-        rep = cover_unit(t, u_idx, passes=passes, dry=dry, skips=skips, target_course=target_course)
+        rep = cover_unit(t, u_idx, passes=passes, dry=dry, skips=skips, target_course=target_course,
+                         lesson_spec=lesson_spec, test_only=test_only, target_step=target_step)
         if rep:
             all_reports.append(rep)
 
