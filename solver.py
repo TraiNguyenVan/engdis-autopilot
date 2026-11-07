@@ -146,24 +146,31 @@ def dom_transcript(t):
 
 
 def play_media(t, timeout=45, quick=False):
-    """Click play button. If quick=True (for exercises), wait 3-4s for server tracking then return."""
+    """Click play button and accelerate playback at 16x speed to complete and trigger server beacon."""
     present = t.js("""(() => [...document.querySelectorAll('audio,video')].filter(x=>(x.currentSrc||x.src)).length)()""")
     if not present:
         return False
-    t.js("(() => {const b=document.querySelector('.layout__mediaPlayPause'); if(b) b.click(); return 1;})()")
-    if quick:
-        time.sleep(3.5)
-        return True
+    t.js("""(() => {
+      const b=document.querySelector('.layout__mediaPlayPause');
+      if(b) b.click();
+      document.querySelectorAll('audio,video').forEach(m => { try { m.playbackRate = 16.0; } catch(e){} });
+      return 1;
+    })()""")
     t0 = time.time()
     while time.time() - t0 < timeout:
-        time.sleep(2)
-        st = t.js("""(() => {const a=[...document.querySelectorAll('audio,video')].filter(x=>(x.currentSrc||x.src));
+        time.sleep(1.0)
+        st = t.js("""(() => {
+          const a=[...document.querySelectorAll('audio,video')].filter(x=>(x.currentSrc||x.src));
           if(!a.length) return 'none';
           const el=a.sort((p,q)=>((q.duration||0)-(p.duration||0)))[0];
-          if(el.ended) return 'ended';
+          try { el.playbackRate = 16.0; } catch(e){}
+          if(el.ended || (el.duration && el.currentTime >= el.duration - 0.5)) return 'ended';
           if(el.currentTime>0 && el.paused) { const b=document.querySelector('.layout__mediaPlayPause'); if(b) b.click(); }
-          return el.currentTime.toFixed(1)+'/'+(el.duration||'?');})()""")
+          return el.currentTime.toFixed(1)+'/'+(el.duration||'?');
+        })()""")
         if st == "ended":
+            return True
+        if quick and (time.time() - t0 >= 4.0):
             return True
     return False
 

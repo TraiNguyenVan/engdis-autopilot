@@ -134,6 +134,12 @@ def match_course(target: str, available_courses: list[dict]) -> dict | None:
 def ensure_course(t, target_course: str) -> dict | None:
     if not target_course:
         return None
+    units_exist = t.js("(() => document.querySelectorAll('.home__unitW').length > 0)()")
+    if not units_exist:
+        t.goto(HOME)
+        poll.wait_until(
+            lambda: t.js("(() => document.querySelectorAll('.home__unitW').length > 0 || !!document.querySelector('.home__courseCarouselSec'))()"),
+            lambda v: bool(v), timeout=15.0, interval=0.3)
     # Fast-check if already on target course
     cur_raw = t.js("(() => localStorage.getItem('Course'))()")
     if cur_raw:
@@ -145,10 +151,6 @@ def ensure_course(t, target_course: str) -> dict | None:
                 return {"CourseId": cid, "courseName": cname}
         except Exception:
             pass
-    t.goto(HOME)
-    poll.wait_until(
-        lambda: t.js("(() => document.querySelectorAll('.home__unitW').length > 0 || !!document.querySelector('.home__courseCarouselSec'))()"),
-        lambda v: bool(v), timeout=15.0, interval=0.3)
     courses = t.js(GET_COURSES_JS)
     if not courses or not isinstance(courses, list):
         print("warning: could not read available courses from localStorage")
@@ -202,11 +204,17 @@ def home_state(t):
     return {}
 
 
-def goto_lesson(t, unit_i, lesson_j):
-    t.goto(HOME)
-    poll.wait_until(
-        lambda: t.js("(() => document.querySelectorAll('.home__unitW').length > 0)()"),
-        lambda v: bool(v), timeout=15.0, interval=0.3)
+def goto_lesson(t, unit_i, lesson_j, target_course=None):
+    if target_course:
+        try:
+            ensure_course(t, target_course)
+        except Exception:
+            pass
+    else:
+        t.goto(HOME)
+        poll.wait_until(
+            lambda: t.js("(() => document.querySelectorAll('.home__unitW').length > 0)()"),
+            lambda v: bool(v), timeout=15.0, interval=0.3)
     res = 'no units'
     for _ in range(5):
         res = t.js(GOTO_JS % (unit_i, lesson_j))
@@ -387,7 +395,7 @@ def cover_unit(t, unit_i, passes=2, dry=False, skips=None, target_course=None,
             print(f"[{l['j']}] {l['name']} {pct(l['progress'])}", flush=True)
             if dry:
                 continue
-            nav = goto_lesson(t, unit_i, l["j"])
+            nav = goto_lesson(t, unit_i, l["j"], target_course=target_course)
             if not str(nav).startswith("ok"):
                 print("   nav failed:", nav)
                 report["lessons"][l["name"]] = {"nav": str(nav)}
@@ -410,6 +418,11 @@ def cover_unit(t, unit_i, passes=2, dry=False, skips=None, target_course=None,
         if dry:
             break
 
+    if target_course:
+        try:
+            ensure_course(t, target_course)
+        except Exception:
+            pass
     h = home_state(t)
     unit = h["units"][unit_i]
     print(f"RESULT unit {unit_i} ({unit['name']}): {pct(unit['progress'])}")

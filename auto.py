@@ -355,8 +355,13 @@ def main(max_iter=120):
             prev = None
             continue
 
-        # intro / reading / interact intro on pages without counter
-        if s["counter"] is None or ("arrow next to the character" in s["body"].lower() and q(t, "return document.querySelectorAll('a.chooseCaracterArrow').length ? 1 : 0;")):
+        # intro / reading / interact intro / Step 1 Explore
+        is_explore = (
+            s["counter"] is None
+            or (s.get("step") and ("step 1" in s["step"].lower() or "explore" in s["step"].lower()))
+            or ("arrow next to the character" in s["body"].lower() and q(t, "return document.querySelectorAll('a.chooseCaracterArrow').length ? 1 : 0;"))
+        )
+        if is_explore:
             # Check if choose speaker exists for interact
             if q(t, "return document.querySelectorAll('a.chooseCaracterArrow').length ? 1 : 0;"):
                 print("-- interact speaker selection")
@@ -365,11 +370,19 @@ def main(max_iter=120):
                 prev = None
                 continue
 
-            poll.wait_until(
-                lambda: q(t, "return [...document.querySelectorAll('audio,video')].some(x=>(x.currentSrc||x.src))?1:0;"),
-                lambda v: v == 1, timeout=3.0, interval=0.25)
-            played = solver.play_media(t, timeout=45, quick=True)
-            print(f"-- intro (media={'y' if played else 'n'})", flush=True)
+            explore_done = t.js("""(() => {
+              const d = document.querySelectorAll('ed-la-dropdownlist')[1];
+              const ch = window.ng?.probe?.(d)?.componentInstance?.dropDownListObj?.Children;
+              return (ch && ch[0] && ch[0].Progress >= 0.999) ? 1 : 0;
+            })()""")
+
+            if not explore_done:
+                poll.wait_until(
+                    lambda: q(t, "return [...document.querySelectorAll('audio,video')].some(x=>(x.currentSrc||x.src))?1:0;"),
+                    lambda v: v == 1, timeout=3.0, interval=0.25)
+                played = solver.play_media(t, timeout=45, quick=False)
+                print(f"-- intro (media={'y' if played else 'n'})", flush=True)
+
             if not advance(t):
                 nxt = solver.set_next_step(t)
                 print(f"-- fallback next step: {nxt}", flush=True)
