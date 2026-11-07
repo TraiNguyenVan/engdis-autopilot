@@ -91,7 +91,8 @@ def handle_speaking(t, src):
     if q(t, "return document.querySelectorAll('a.chooseCaracterArrow').length;"):
         t.js("(() => {const a=document.querySelectorAll('a.chooseCaracterArrow'); if(a.length) a[0].click(); return 1;})()")
         time.sleep(2)
-    if not click_text(t, "Start"):
+    clicked = click_text(t, "Start") or t.js("(() => {const b=document.querySelector('.openSpeech__btnStart, .openSpeech__btn'); if(b){b.click(); return 1;} return 0;})()")
+    if not clicked:
         return "speak: blocked"
     time.sleep(3.5)
     return "speak: clicked"
@@ -346,8 +347,11 @@ def main(max_iter=120):
             if (typeof app?.isStepTest === 'function' && app.isStepTest()) return true;
             if (document.querySelector('.learning__submitTestLink')) return true;
             const nav = app?.navigationService;
-            const name = nav?._stepsList?.SelectedNode?.Name || '';
-            return name.toLowerCase() === 'test' || /test|review/i.test(document.querySelector('.learning__dropDownListTitle')?.innerText || '');
+            const name = (nav?._stepsList?.SelectedNode?.Name || '').toLowerCase();
+            if (name === 'test' || name === 'review') return true;
+            const dds = [...document.querySelectorAll('ed-la-dropdownlist')];
+            const stepTitle = dds.length > 1 ? (dds[1].innerText || '').toLowerCase() : '';
+            return /test|review/.test(stepTitle);
         })()""")
 
         if is_test:
@@ -372,7 +376,7 @@ def main(max_iter=120):
                   if(window.tinymce && tinymce.activeEditor) return 'write';
                   const a=[...document.querySelectorAll('a.button.continue,button.button.continue,input.button.continue,button,input[type=button]')]
                     .map(e=>(e.innerText||e.value||'').trim());
-                  if(a.includes('Start')) return 'speak';
+                  if(a.includes('Start') || document.querySelector('.openSpeech__btnStart, .openSpeech__btn')) return 'speak';
                   return 'other';
                 })()""")
                 if kind == "speak":

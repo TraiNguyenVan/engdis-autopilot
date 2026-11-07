@@ -289,8 +289,13 @@ def parse_unit_specs(spec, total_units=10):
     return valid
 
 
-def cover_unit(t, unit_i, passes=2, dry=False, skips=None):
+def cover_unit(t, unit_i, passes=2, dry=False, skips=None, target_course=None):
     skips = skips or []
+    if target_course:
+        try:
+            ensure_course(t, target_course)
+        except Exception as e:
+            print(f"warning: ensure_course failed: {e}")
     h = home_state(t)
     if not h.get("units") or unit_i >= len(h["units"]):
         print(f"no home data or invalid unit index {unit_i}")
@@ -314,6 +319,11 @@ def cover_unit(t, unit_i, passes=2, dry=False, skips=None):
         if os.path.exists(os.path.join(HERE, "STOP")):
             print("STOP file present, halting passes")
             break
+        if target_course:
+            try:
+                ensure_course(t, target_course)
+            except Exception as e:
+                print(f"warning: ensure_course pass {p} failed: {e}")
         h = home_state(t)
         unit = h["units"][unit_i]
         todo = [l for l in unit["lessons"] if _num(l["progress"]) < 0.999
@@ -416,7 +426,7 @@ def main():
         if os.path.exists(os.path.join(HERE, "STOP")):
             print("STOP file present, stopping multi-unit walk")
             break
-        rep = cover_unit(t, u_idx, passes=passes, dry=dry, skips=skips)
+        rep = cover_unit(t, u_idx, passes=passes, dry=dry, skips=skips, target_course=target_course)
         if rep:
             all_reports.append(rep)
 
