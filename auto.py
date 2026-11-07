@@ -111,18 +111,25 @@ def handle_test(t, src):
     """Answer a test question set, submit on the last one."""
     # Listening tests score 40% if answered blind; transcribe the audio once per test.
     if "[TRANSCRIPT]" not in src:
-        url = t.js("""(() => {const m=[...document.querySelectorAll('audio,video')]
+        # 1. Try DOM transcript first (instant, free)
+        dt = solver.dom_transcript(t)
+        if dt:
+            src = "[TRANSCRIPT]\n" + dt + "\n\n" + src
+            print(f"test dom-transcript ({len(dt)} chars)", flush=True)
+        else:
+            # 2. Fallback to audio download + ASR
+            url = t.js("""(() => {const m=[...document.querySelectorAll('audio,video')]
             .map(x=>x.currentSrc||x.src).filter(Boolean); return m.length?m[m.length-1]:'';})()""")
-        if url:
-            key = url.rsplit('/', 1)[-1].rsplit('.', 1)[0]
-            try:
-                tr = solver.transcript_for(url, key)
-            except Exception as e:
-                tr = ''
-                print("! transcript %s: %s" % (key, str(e)[:140]), flush=True)
-            if tr:
-                src = "[TRANSCRIPT]\n" + tr + "\n\n" + src
-                print("test transcript", key, len(tr))
+            if url:
+                key = url.rsplit('/', 1)[-1].rsplit('.', 1)[0]
+                try:
+                    tr = solver.transcript_for(url, key)
+                except Exception as e:
+                    tr = ''
+                    print("! transcript %s: %s" % (key, str(e)[:140]), flush=True)
+                if tr:
+                    src = "[TRANSCRIPT]\n" + tr + "\n\n" + src
+                    print("test transcript", key, len(tr))
     out = solver.do_task(t, src)
     # unanswered question (render race or a failed click) would silently score 0:
     # retry once before the caller advances to the next question
@@ -245,10 +252,18 @@ def main(max_iter=120):
               return (!w && p && p.innerHTML.length < 50) ? 1 : 0;""")
         WIDGETS_JS = ("""const n=document.querySelectorAll('.prMCQ__qaSet,.lessonMultipleAnswer,.dnditem,.TTpanswerDiv,.draggable,.dndZone,.wordBankTile').length;
               return n ? 1 : 0;""")
-        STEP_PROGRESS_JS = """(() => {const d=document.querySelectorAll('ed-la-dropdownlist')[1];
-              if(!d) return null; const c=ng.probe(d).componentInstance;
-              const o=c && c.dropDownListObj; const n=o && (o.SelectedNode || (o.Children||[])[o.SelectedIndex]);
-              return n ? Number(n.Progress) : null;})()"""
+        STEP_PROGRESS_JS = """(() => {
+          const d = document.querySelectorAll('ed-la-dropdownlist')[1];
+          if (!d) return null;
+          const c = ng.probe(d).componentInstance;
+          const o = c && c.dropDownListObj;
+          if (!o || !o.Children) return null;
+          const stepText = (d.innerText || '').split(String.fromCharCode(10))[0].trim().toLowerCase();
+          // Find matching child node by name
+          let match = o.Children.find(x => stepText.includes((x.Name || '').trim().toLowerCase()));
+          if (!match && o.SelectedNode) match = o.SelectedNode;
+          return match ? Number(match.Progress) : null;
+        })()"""
         sp = t.js(STEP_PROGRESS_JS)
         skipped = (not isinstance(sp, bool)) and isinstance(sp, (int, float)) and sp >= 0.999
         if skipped:
@@ -281,7 +296,7 @@ def main(max_iter=120):
             poll.wait_until(
                 lambda: q(t, "return [...document.querySelectorAll('audio,video')].some(x=>(x.currentSrc||x.src))?1:0;"),
                 lambda v: v == 1, timeout=16.0, interval=0.25)
-            played = solver.play_media(t, timeout=45)
+            played = solver.play_media(t, timeout=45, quick=True)
             print(f"-- intro (media={'y' if played else 'n'})", flush=True)
             if not advance(t):
                 solver.set_next_step(t)

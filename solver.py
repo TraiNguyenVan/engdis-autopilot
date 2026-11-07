@@ -132,12 +132,26 @@ def source_text(t):
     })()""")
 
 
-def play_media(t, timeout=90):
-    """Click the player's play button and wait until the media finishes."""
+def dom_transcript(t):
+    """Grab transcript directly from DOM if present (e.g. 'See Text' container)."""
+    return t.js("""(() => {
+      const el = document.querySelector('#textContainer, .seeTextContainer, .learning__RATextW');
+      if (el && el.innerText && el.innerText.trim().length > 10) {
+        return el.innerText.trim();
+      }
+      return null;
+    })()""")
+
+
+def play_media(t, timeout=45, quick=False):
+    """Click play button. If quick=True (for exercises), wait 3-4s for server tracking then return."""
     present = t.js("""(() => [...document.querySelectorAll('audio,video')].filter(x=>(x.currentSrc||x.src)).length)()""")
     if not present:
         return False
     t.js("(() => {const b=document.querySelector('.layout__mediaPlayPause'); if(b) b.click(); return 1;})()")
+    if quick:
+        time.sleep(3.5)
+        return True
     t0 = time.time()
     while time.time() - t0 < timeout:
         time.sleep(2)
@@ -641,13 +655,19 @@ def main(max_tasks=200):
             continue
 
         # audio/video comprehension task: make sure we have a transcript
-        u = media_url(t)
-        if u and "transcript" not in src.lower():
-            key = u.rsplit("/", 1)[-1].split("?")[0]
-            tr = transcript_for(u, key)
-            if tr:
-                src += "\n\nAUDIO TRANSCRIPT:\n" + tr
-                print(f"-- transcript {key} ({len(tr)} chars)")
+        if "transcript" not in src.lower():
+            dt = dom_transcript(t)
+            if dt:
+                src += "\n\nAUDIO TRANSCRIPT:\n" + dt
+                print(f"-- dom-transcript ({len(dt)} chars)")
+            else:
+                u = media_url(t)
+                if u:
+                    key = u.rsplit("/", 1)[-1].split("?")[0]
+                    tr = transcript_for(u, key)
+                    if tr:
+                        src += "\n\nAUDIO TRANSCRIPT:\n" + tr
+                        print(f"-- transcript {key} ({len(tr)} chars)")
 
         if stuck >= 3:
             # try switching step, then give up
