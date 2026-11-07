@@ -8,6 +8,7 @@ Usage:  python3 cover.py [unit_index] [passes] [--dry]
         unit_index is 0-based (Unit 2 == 1)
 """
 import json
+from datetime import datetime, timezone
 import os
 import subprocess
 import threading
@@ -213,28 +214,40 @@ def run_lesson(lesson_name, max_iter=90):
     """Run auto.py once; bounded, never raises."""
     cmd = [sys.executable, "-u", "auto.py", str(max_iter)]
     started = time.time()
-    os.makedirs(os.path.join(HERE, "logs"), exist_ok=True)
+    log_dir = os.environ.get("ED_LOG_DIR") or os.path.join(HERE, "logs")
+    os.makedirs(log_dir, exist_ok=True)
     safe = "".join(c if c.isalnum() or c in " -_" else "_" for c in lesson_name).strip()
-    lp = os.path.join(HERE, "logs", safe + ".log")
+    lp = os.path.join(log_dir, safe + ".log")
     tail = []
     try:
         with open(lp, "a") as lf:
-            lf.write("\n=== %s %s\n" % (time.strftime("%H:%M:%S"), lesson_name))
-            lf.flush()
+            def log(message):
+                lf.write(f"{datetime.now(timezone.utc).isoformat(timespec='seconds')} {message}\n")
+                lf.flush()
+            log(f"start lesson={lesson_name!r} max_iter={max_iter}")
             env = dict(os.environ, ED_LESSON_LOCK="1")
             p = subprocess.Popen(cmd, cwd=HERE, stdout=subprocess.PIPE, env=env,
                                  stderr=subprocess.STDOUT, text=True, bufsize=1)
-            killer = threading.Timer(PER_LESSON_TIMEOUT, p.kill)
+            timed_out = threading.Event()
+            def kill_timed_out():
+                if p.poll() is None:
+                    timed_out.set()
+                    p.kill()
+            killer = threading.Timer(PER_LESSON_TIMEOUT, kill_timed_out)
             killer.start()
-            for line in p.stdout:
-                lf.write(line)
-                lf.flush()
-                if line.strip():
-                    tail.append(line.rstrip())
-                    tail = tail[-6:]
-            p.wait()
-            killer.cancel()
-            rc = p.returncode
+            try:
+                assert p.stdout is not None
+                with p.stdout:
+                    for line in p.stdout:
+                        log("worker " + line.rstrip("\r\n"))
+                        if line.strip():
+                            tail.append(line.rstrip())
+                            tail = tail[-6:]
+                p.wait()
+            finally:
+                killer.cancel()
+            rc = "timeout" if timed_out.is_set() else p.returncode
+            log(f"exit rc={rc} duration={int(time.time() - started)}s")
     except subprocess.TimeoutExpired:
         p.kill()
         rc, tail = "timeout", ["timeout"]

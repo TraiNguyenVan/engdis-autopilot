@@ -13,7 +13,8 @@ ED_CDP_PORT="${ED_CDP_PORT:-9225}"
 echo "=== Engdis Autopilot Container Starting ==="
 echo "Course: ${ED_COURSE:-<default>} | Units: ${TARGET_UNITS} | Passes: ${ED_PASSES} | Dry Run: ${ED_DRY_RUN}"
 
-mkdir -p /data/profile /data/cache /data/reports
+mkdir -p /data/profile /data/cache /data/reports /data/logs
+export ED_LOG_DIR=/data/logs
 export ED_SCRATCH=/data/cache
 export ED_REPORT_DIR=/data/reports
 export ED_CDP_PORT="${ED_CDP_PORT}"

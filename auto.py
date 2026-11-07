@@ -20,17 +20,20 @@ def q(t, expr):
 def st(t):
     return {
         "step": t.js("""(() => {
-            const app = window.ng?.probe?.(document.querySelector('app'))?.componentInstance;
-            const name = app?.navigationService?._stepsList?.SelectedNode?.Name;
-            if (name) return name;
             const d = document.querySelectorAll('ed-la-dropdownlist');
+            const c = d[1] ? window.ng?.probe?.(d[1])?.componentInstance : null;
+            const node = c?.dropDownListObj?.SelectedNode;
+            if (node?.NodeId) return (node.Name || 'Step') + ':' + node.NodeId;
+            const app = window.ng?.probe?.(document.querySelector('app'))?.componentInstance;
+            const aNode = app?.navigationService?._stepsList?.SelectedNode;
+            if (aNode?.NodeId) return (aNode.Name || 'Step') + ':' + aNode.NodeId;
             return d[1] ? d[1].innerText.split('\\n')[0] : '';
         })()"""),
         "lesson": t.js("""(() => {const d=document.querySelectorAll('ed-la-dropdownlist'); return d[0]? d[0].innerText.split('\\n')[0] : '';})()"""),
         "counter": t.js("""(() => {const c=document.querySelector('.learning__taskNavPCCurrentTask'); return c? c.innerText.trim(): null;})()"""),
         "total": t.js("""(() => {const c=document.querySelector('.learning__taskNavPCTotalTasks'); return c? c.innerText.trim(): null;})()"""),
-        "body": t.js("(() => document.body.innerText.slice(0,600))()"),
-        "unit": t.js("""(() => {const m = (document.body.innerText||'').match(/Unit\\s+\\d+/i); return m ? m[0].replace(/\\s+/, ' ') : '';})()"""),
+        "body": t.js("(() => (document.body?.innerText || '').slice(0,600))()"),
+        "unit": t.js("""(() => {const m = (document.body?.innerText||'').match(/Unit\\s+\\d+/i); return m ? m[0].replace(/\\s+/, ' ') : '';})()"""),
     }
 
 
@@ -142,17 +145,17 @@ def handle_test(t, src):
                     src = "[TRANSCRIPT]\n" + tr + "\n\n" + src
                     print("test transcript", key, len(tr))
     out = solver.do_task(t, src)
-    # unanswered question (render race or a failed click) would silently score 0:
-    # retry once before the caller advances to the next question
-    if out.startswith("other:") or (
-        q(t, "return document.querySelector('.prMCQ__qaSet')?1:0;")
-        and not q(t, "return document.querySelectorAll('.prMCQ__answers--checked').length;")
-    ):
+    # Require a checked answer in every MCQ set, including after retry.
+    def unanswered(result):
+        return result.startswith("other:") or bool(q(t, """return [...document.querySelectorAll('.prMCQ__qaSet')].some(e=>!e.querySelector('.prMCQ__answers--checked'))?1:0;"""))
+
+    if unanswered(out):
         time.sleep(1.5)
         retry = solver.do_task(t, src)
-        if not retry.startswith("other:"):
-            out = retry
+        out = retry
         print("test retry", str(retry)[:60], flush=True)
+    if unanswered(out):
+        return "test-unanswered: " + out
     poll.wait_until(
         lambda: q(t, "return [...document.querySelectorAll('a,button,input')].some(e=>/^Check answer$/i.test((e.innerText||e.value||'').trim()))?1:0;"),
         lambda v: v == 1, timeout=3.0, interval=0.12)
@@ -201,6 +204,24 @@ def update_live_status(s, action=""):
         os.replace(live_path + ".tmp", live_path)
     except Exception:
         pass
+
+def require_lesson_complete(t):
+    """Exit successfully only when every step has verified progress."""
+    progress = t.js("""(() => {
+      const d = document.querySelectorAll('ed-la-dropdownlist')[1];
+      const children = window.ng?.probe?.(d)?.componentInstance?.dropDownListObj?.Children;
+      if (!Array.isArray(children) || !children.length) return null;
+      return children.map(node => node?.Progress ?? null);
+    })()""")
+    if (isinstance(progress, list) and progress and all(
+        not isinstance(p, bool) and isinstance(p, (int, float)) and p >= 0.999
+        for p in progress
+    )):
+        print("All steps done — lesson complete")
+        sys.exit(0)
+    print(f"LESSON-INCOMPLETE or progress unavailable: {progress}")
+    sys.exit(2)
+
 
 def main(max_iter=120):
     t = edlib.tab()
@@ -267,14 +288,13 @@ def main(max_iter=120):
         STEP_PROGRESS_JS = """(() => {
           const d = document.querySelectorAll('ed-la-dropdownlist')[1];
           if (!d) return null;
-          const c = ng.probe(d).componentInstance;
-          const o = c && c.dropDownListObj;
-          if (!o || !o.Children) return null;
-          const stepText = (d.innerText || '').split(String.fromCharCode(10))[0].trim().toLowerCase();
-          // Find matching child node by name
-          let match = o.Children.find(x => stepText.includes((x.Name || '').trim().toLowerCase()));
-          if (!match && o.SelectedNode) match = o.SelectedNode;
-          return match ? Number(match.Progress) : null;
+          const c = window.ng?.probe?.(d)?.componentInstance;
+          const o = c?.dropDownListObj;
+          if (o?.SelectedNode) return Number(o.SelectedNode.Progress);
+          const app = window.ng?.probe?.(document.querySelector('app'))?.componentInstance;
+          const node = app?.navigationService?._stepsList?.SelectedNode;
+          if (node) return Number(node.Progress);
+          return null;
         })()"""
         sp = t.js(STEP_PROGRESS_JS)
         skipped = (not isinstance(sp, bool)) and isinstance(sp, (int, float)) and sp >= 0.999
@@ -284,8 +304,10 @@ def main(max_iter=120):
             adv_tries[key] = adv
             print(f"-- step done (progress={sp}); advancing [{adv}/3]")
             if not advance(t) or adv > 1:
-                solver.set_next_step(t)
+                nxt = solver.set_next_step(t)
                 time.sleep(1.0)
+                if nxt == 'last step':
+                    require_lesson_complete(t)
             if adv > 4:
                 print(f"STEP-SWITCH-STUCK ({s['lesson']}) — returning to home to clear lock")
                 t.goto("https://ed22.engdis.com/ptithcm#/home", wait=4)
@@ -304,7 +326,7 @@ def main(max_iter=120):
             continue
 
         # intro / reading / interact intro on pages without counter
-        if s["counter"] is None:
+        if s["counter"] is None or ("arrow next to the character" in s["body"].lower() and q(t, "return document.querySelectorAll('a.chooseCaracterArrow').length ? 1 : 0;")):
             # Check if choose speaker exists for interact
             if q(t, "return document.querySelectorAll('a.chooseCaracterArrow').length ? 1 : 0;"):
                 print("-- interact speaker selection")
@@ -322,21 +344,7 @@ def main(max_iter=120):
                 nxt = solver.set_next_step(t)
                 print(f"-- fallback next step: {nxt}", flush=True)
                 if nxt == 'last step':
-                    # Only complete lesson if current step is indeed done or test submitted
-                    check_done = t.js("""(() => {
-                        const dd1 = document.querySelectorAll('ed-la-dropdownlist')[1];
-                        const comp = ng.probe(dd1)?.componentInstance;
-                        const listObj = comp?.dropDownListObj;
-                        if (!listObj || !listObj.Children) return false;
-                        const cur = (comp?.selectedListItemIndex || 1) - 1;
-                        const node = listObj.Children[cur];
-                        return node ? (node.Progress >= 0.999 || node.IsDone) : false;
-                    })()""")
-                    if check_done:
-                        print("Last step with no counter — lesson complete")
-                        return
-                    else:
-                        print("Reached 'last step' but step is not done, staying to solve")
+                    require_lesson_complete(t)
             prev = None
             time.sleep(1.0)
             continue
@@ -354,6 +362,8 @@ def main(max_iter=120):
             return /test|review/.test(stepTitle);
         })()""")
 
+        if q(t, "return document.querySelectorAll('a.chooseCaracterArrow').length ? 1 : 0;"):
+            is_test = False
         if is_test:
             out = handle_test(t, src)
         else:
@@ -399,6 +409,8 @@ def main(max_iter=120):
                         out = "other: " + s["body"][:80].replace("\n", " ")
 
         print(f"[{s['counter']}/{s['total']}] {str(out)[:100]}", flush=True)
+        if is_test and out.startswith("test-unanswered:"):
+            continue
         if not advance(t):
             if s.get("counter") and s.get("total") and s["counter"] == s["total"]:
                 solver.set_next_step(t)

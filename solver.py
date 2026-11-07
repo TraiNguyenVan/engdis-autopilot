@@ -128,7 +128,7 @@ def source_text(t):
     return t.js("""(() => {
       const r=document.querySelector('ed-la-resourcearea');
       const rt = r ? r.innerText.trim() : '';
-      const b = document.body.innerText;
+      const b = document.body?.innerText || '';
       const i = b.indexOf('Back');
       return {resource: rt, body: b.slice(0, 6000)};
     })()""")
@@ -313,6 +313,79 @@ def solve_drag(t, src):
 
     # leftover bank words that clearly belong nowhere: drag out of bank to first free zone as fallback
     return "drag: " + " ".join(done)
+
+
+
+def solve_sequence(t, src):
+    """Dialogue / chronological sequence: reorder items across dndZones."""
+    neutralize(t)
+    jso(t, "document.body.style.zoom='0.8'; return 1;")
+    time.sleep(0.5)
+
+    raw = t.js("""(() => {
+      const zones = [...document.querySelectorAll('.sequenceZone .dndZone, .prSeq__zone--txt .dndZone, .dndZone')];
+      const unique = [];
+      const seen = new Set();
+      for (const z of zones) {
+        const n = z.getAttribute('dg_name');
+        if (!n || n === 'TTpTablePlaceHolder' || seen.has(n)) continue;
+        seen.add(n);
+        const item = z.querySelector('.dnditem');
+        unique.push({
+          zone: n,
+          text: (item ? item.innerText : z.innerText || '').trim()
+        });
+      }
+      return unique;
+    })()""")
+
+    if not raw or len(raw) < 2:
+        return "sequence: no-items"
+
+    prompt_items = "\n".join(f"{i+1}. {x['text']}" for i, x in enumerate(raw))
+    q = (f"SOURCE MATERIAL / CONTEXT:\n{src}\n\n"
+         f"TASK: Put the following items in the correct order (dialogue, chronological events, or logical order).\n\n"
+         f"ITEMS:\n{prompt_items}\n\n"
+         f"Reply with JSON: {{\"order\": [1, 2, ...]}} listing the 1-based indices of the items in their correct sequential order.")
+
+    r = ask_json(q, max_tokens=1000)
+    order = (r or {}).get("order", [])
+    if not order or len(order) != len(raw):
+        print("-- sequence LLM invalid order, retrying")
+        r = ask_json(q, max_tokens=1000)
+        order = (r or {}).get("order", [])
+    if not order:
+        return "sequence: EMPTY-ORDER"
+
+    target_texts = []
+    for idx in order:
+        if isinstance(idx, int) and 1 <= idx <= len(raw):
+            target_texts.append(raw[idx - 1]["text"])
+        else:
+            return "sequence: INVALID-INDICES"
+
+    neutralize(t)
+    for pos, text in enumerate(target_texts):
+        prefix = text[:30].strip()
+        for _ in range(3):
+            # Check if this zone already has the correct item
+            already = t.js(f"""(() => {{
+              const z = document.querySelector('.dndZone[dg_name="{pos}"]');
+              const it = z ? z.querySelector('.dnditem') : null;
+              return it && it.innerText.toLowerCase().includes({json.dumps(prefix.lower())}) ? 1 : 0;
+            }})()""")
+            if already:
+                break
+            rr = edlib.rects(t)
+            item = next((x for x in rr["items"] if x["t"].startswith(prefix) or prefix in x["t"]), None)
+            zone = next((x for x in rr["zones"] if x["n"] == str(pos)), None)
+            if not item or not zone:
+                break
+            t.drag_xy(item["cx"], item["cy"], zone["cx"], zone["cy"] + 25)
+            time.sleep(0.8)
+            neutralize(t)
+
+    return "sequence: ok"
 
 
 
@@ -536,6 +609,8 @@ def do_task(t, src):
           || document.querySelector('.DDLOptions__selected')
           || document.querySelector('.lessonMultipleAnswer')
           || document.querySelector('.dnditem')
+          || document.querySelector('.sequenceZone')
+          || document.querySelector('.prSeq__zone--txt')
           || document.querySelector('.TTpanswerDiv')
           || document.querySelector('.learning__selectTxt_st, span.st')
           || (window.tinymce && tinymce.activeEditor && tinymce.activeEditor.initialized))
@@ -549,7 +624,11 @@ def do_task(t, src):
       if(document.querySelector('.DDLOptions__selected')) return 'fitb';
       if(document.querySelectorAll('.prMCQ__qaSet').length) return 'mcq';
       if(document.querySelectorAll('.lessonMultipleAnswer').length) return 'multi';
-      if(document.querySelectorAll('.dnditem').length && document.querySelectorAll('.dndZone').length) return 'drag';
+      if(document.querySelector('.sequenceZone, .prSeq__zone--txt, .prSeqImg__zone, .sequenceZoneWrapper')) return 'sequence';
+      if(document.querySelectorAll('.dnditem').length && document.querySelectorAll('.dndZone').length) {
+        if(!document.querySelector('.dndZone[dg_name="TTpTablePlaceHolder"]')) return 'sequence';
+        return 'drag';
+      }
       if(document.querySelectorAll('.TTpanswerDiv').length && document.querySelectorAll('.draggable').length) return 'lcloze';
       if(document.querySelectorAll('.draggable.wordBankTile').length && document.querySelectorAll('.dndZone').length) return 'cloze';
       if(document.querySelectorAll('.learning__selectTxt_st, span.st').length) return 'select_text';
@@ -559,6 +638,8 @@ def do_task(t, src):
         return solve_mcq(t, src)
     if kind == "multi":
         return solve_multi(t, src)
+    if kind == "sequence":
+        return solve_sequence(t, src)
     if kind == "drag":
         return solve_drag(t, src)
     if kind == "cloze":
@@ -584,7 +665,7 @@ def set_step(t, index):
     """Switch step via ed-la-dropdownlist component or navigationService (index 0-based)."""
     return t.js(f"""(() => {{
       const dd1 = document.querySelectorAll('ed-la-dropdownlist')[1];
-      const comp = ng.probe(dd1)?.componentInstance;
+      const comp = dd1 ? window.ng?.probe?.(dd1)?.componentInstance : null;
       const listObj = comp?.dropDownListObj;
       if (comp && listObj && listObj.Children && listObj.Children[{index}]) {{
         const target = listObj.Children[{index}];
@@ -593,7 +674,7 @@ def set_step(t, index):
           return target.Name + ' (' + target.NodeId + ') via comp';
         }} catch(e) {{}}
       }}
-      const app = ng.probe(document.querySelector('app'))?.componentInstance;
+      const app = document.querySelector('app') ? window.ng?.probe?.(document.querySelector('app'))?.componentInstance : null;
       const nav = app?.navigationService;
       if (!nav || !nav._stepsList || !nav._stepsList.Children) return 'no nav';
       const k = nav._stepsList.Children[{index}];
@@ -611,7 +692,7 @@ def set_next_step(t):
     """Advance to the next step via ed-la-dropdownlist component or navigationService."""
     return t.js("""(() => {
       const dd1 = document.querySelectorAll('ed-la-dropdownlist')[1];
-      const comp = ng.probe(dd1)?.componentInstance;
+      const comp = dd1 ? window.ng?.probe?.(dd1)?.componentInstance : null;
       const listObj = comp?.dropDownListObj;
       
       let cur = -1;
@@ -622,7 +703,7 @@ def set_next_step(t):
         cur = listObj.SelectedIndex;
       }
       
-      const app = ng.probe(document.querySelector('app'))?.componentInstance;
+      const app = document.querySelector('app') ? window.ng?.probe?.(document.querySelector('app'))?.componentInstance : null;
       const nav = app?.navigationService;
       const totalSteps = (listObj && listObj.Children ? listObj.Children.length : 0) || (nav && nav._stepsList && nav._stepsList.Children ? nav._stepsList.Children.length : 0);
       
