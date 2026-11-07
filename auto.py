@@ -19,7 +19,13 @@ def q(t, expr):
 
 def st(t):
     return {
-        "step": t.js("""(() => {const d=document.querySelectorAll('ed-la-dropdownlist'); return d[1]? d[1].innerText.split('\\n')[0] : '';})()"""),
+        "step": t.js("""(() => {
+            const app = window.ng?.probe?.(document.querySelector('app'))?.componentInstance;
+            const name = app?.navigationService?._stepsList?.SelectedNode?.Name;
+            if (name) return name;
+            const d = document.querySelectorAll('ed-la-dropdownlist');
+            return d[1] ? d[1].innerText.split('\\n')[0] : '';
+        })()"""),
         "lesson": t.js("""(() => {const d=document.querySelectorAll('ed-la-dropdownlist'); return d[0]? d[0].innerText.split('\\n')[0] : '';})()"""),
         "counter": t.js("""(() => {const c=document.querySelector('.learning__taskNavPCCurrentTask'); return c? c.innerText.trim(): null;})()"""),
         "total": t.js("""(() => {const c=document.querySelector('.learning__taskNavPCTotalTasks'); return c? c.innerText.trim(): null;})()"""),
@@ -41,6 +47,8 @@ def click_text(t, text):
 def purge_modals(t):
     return q(t, """document.querySelectorAll('iframe#colorBoxIframe').forEach(f=>f.remove());
       document.querySelectorAll('#colorbox,.colorbox').forEach(e=>e.remove());
+      document.querySelectorAll('.modal-close, .modalW, .modal, .layout__alertModal, .modal-backdrop').forEach(e=>e.remove());
+      document.body.classList.remove('modal-open');
       const ed=document.querySelector('#EdoFrameBox'); if(ed) ed.style.display='none';
       return 1;""")
 
@@ -49,14 +57,16 @@ def advance(t, tries=3):
     """Purge blocking modals, then click Next until the counter changes."""
     def cur():
         return q(t, """const e=document.querySelector('.learning__taskNavPCCurrentTask');
+          const app=window.ng?.probe?.(document.querySelector('app'))?.componentInstance;
+          const sIdx=app?.navigationService?._stepsList?.SelectedIndex;
           const d=document.querySelectorAll('ed-la-dropdownlist')[1];
           const dt=d?(d.innerText||'').trim().slice(0,14):'-';
-          return (e?e.innerText.trim():'-')+'|'+dt;""")
+          return (e?e.innerText.trim():'-')+'|'+(sIdx!==undefined?sIdx:dt);""")
     before = cur()
     for _ in range(tries):
         purge_modals(t)
         click(t, ".learning__taskNext")
-        now = poll.wait_until(cur, lambda v: v != before, timeout=6.0,
+        now = poll.wait_until(cur, lambda v: v != before, timeout=4.0,
                               interval=0.2, settle=0.2)
         if now != before:
             return True
@@ -281,26 +291,40 @@ def main(max_iter=120):
             prev = None
             continue
 
+        # Reached end of course
+        if q(t, "return /reached the end of this course/i.test(document.body.innerText) ? 1 : 0;"):
+            print("END-OF-COURSE modal detected — lesson finished")
+            return
+
         # test entry screen
         if q(t, "return document.querySelector('.btnStartTest')?1:0;"):
             click(t, ".btnStartTest")
             print("test started")
             poll.wait_until(
                 lambda: q(t, "const e=document.querySelector('.learning__taskNavPCCurrentTask'); return e?e.innerText.trim():null;"),
-                lambda v: v is not None, timeout=15.0, interval=0.25)
-            prev = None
+                lambda v: v is not None, timeout=10.0, interval=0.25)
             continue
 
         # intro / reading / interact intro on pages without counter
         if s["counter"] is None:
+            # Check if choose speaker exists for interact
+            if q(t, "return document.querySelectorAll('a.chooseCaracterArrow').length ? 1 : 0;"):
+                print("-- interact speaker selection")
+                t.js("(() => {const a=document.querySelectorAll('a.chooseCaracterArrow'); if(a.length) a[0].click(); return 1;})()")
+                time.sleep(2.0)
+                continue
+
             poll.wait_until(
                 lambda: q(t, "return [...document.querySelectorAll('audio,video')].some(x=>(x.currentSrc||x.src))?1:0;"),
-                lambda v: v == 1, timeout=16.0, interval=0.25)
+                lambda v: v == 1, timeout=3.0, interval=0.25)
             played = solver.play_media(t, timeout=45, quick=True)
             print(f"-- intro (media={'y' if played else 'n'})", flush=True)
             if not advance(t):
-                solver.set_next_step(t)
-            prev = None
+                nxt = solver.set_next_step(t)
+                if nxt == 'last step':
+                    print("Last step with no counter — lesson complete")
+                    return
+                time.sleep(1.0)
             continue
 
         is_test = t.js("""(() => {
