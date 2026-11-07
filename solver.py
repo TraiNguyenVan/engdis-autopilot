@@ -74,6 +74,8 @@ def neutralize(t):
     """Remove modal overlays that eat mouse events (they only block real input, JS clicks pass)."""
     return jso(t, """
       document.querySelectorAll('#colorbox, .colorbox').forEach(e=>e.remove());
+      document.querySelectorAll('.modal-close, .modalW, .modal, .layout__alertModal, .modal-backdrop').forEach(e=>e.remove());
+      document.body.classList.remove('modal-open');
       document.querySelectorAll('.utils__siteOverlay').forEach(e=>{e.style.pointerEvents='none';});
       const fb=document.getElementById('EdoFrameBox'); if(fb){fb.style.display='none';}
       return 1;

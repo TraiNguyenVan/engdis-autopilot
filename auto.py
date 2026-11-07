@@ -291,11 +291,6 @@ def main(max_iter=120):
             prev = None
             continue
 
-        # Reached end of course
-        if q(t, "return /reached the end of this course/i.test(document.body.innerText) ? 1 : 0;"):
-            print("END-OF-COURSE modal detected — lesson finished")
-            return
-
         # test entry screen
         if q(t, "return document.querySelector('.btnStartTest')?1:0;"):
             click(t, ".btnStartTest")
@@ -319,12 +314,14 @@ def main(max_iter=120):
                 lambda v: v == 1, timeout=3.0, interval=0.25)
             played = solver.play_media(t, timeout=45, quick=True)
             print(f"-- intro (media={'y' if played else 'n'})", flush=True)
-            if not advance(t):
-                nxt = solver.set_next_step(t)
-                if nxt == 'last step':
-                    print("Last step with no counter — lesson complete")
-                    return
-                time.sleep(1.0)
+            nxt = solver.set_next_step(t)
+            print(f"-- next step: {nxt}", flush=True)
+            if nxt == 'last step':
+                print("Last step with no counter — lesson complete")
+                return
+            elif nxt == 'no nav':
+                advance(t)
+            time.sleep(1.0)
             continue
 
         is_test = t.js("""(() => {
