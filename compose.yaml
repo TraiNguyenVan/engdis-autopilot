@@ -29,10 +29,9 @@ services:
       - OPENAI_BASE_URL=${OPENAI_BASE_URL:-https://api.openai.com/v1}
       - OPENAI_API_KEY=${OPENAI_API_KEY:-}
       - OPENAI_MODEL=${OPENAI_MODEL:-gpt-4o-mini}
-      - ED_CRED=/run/secrets/engdis_cred
+      - ED_CRED=${ED_CRED:-}
     volumes:
       - engdis_data:/data
-      - ${ED_CRED_FILE:-/home/yes/.hermes/.config/engdis/cred}:/run/secrets/engdis_cred:ro
     restart: "no"
 
 volumes:

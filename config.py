@@ -54,7 +54,7 @@ def _build_chat_completions_url(base_or_full_url: str) -> str:
 CDP_PORT: int = _get_int("ED_CDP_PORT", 9225)
 SCRATCH: str = os.environ.get("ED_SCRATCH", "/opt/data/cache/scratch/ed22u1")
 REPORT_DIR: str = os.environ.get("ED_REPORT_DIR", ".")
-CRED_PATH: str = os.environ.get("ED_CRED", "/opt/data/.config/engdis/cred")
+CRED_PATH: str = os.environ.get("ED_CRED", "")
 DRY_RUN: bool = _get_bool("ED_DRY_RUN", False)
 CHROME_BIN: str = os.environ.get("CHROME_BIN", "chromium")
 ED_COURSE: str = os.environ.get("ED_COURSE", "")

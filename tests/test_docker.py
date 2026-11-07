@@ -24,7 +24,8 @@ class TestDockerConfiguration(unittest.TestCase):
         self.assertIn("mem_limit", content)
         self.assertIn("1280m", content)
         self.assertIn('shm_size: "256m"', content)
-        self.assertIn("/run/secrets/engdis_cred:ro", content)
+        self.assertIn("ED_USER=${ED_USER:-}", content)
+        self.assertIn("ED_PASS=${ED_PASS:-}", content)
 
     def test_entrypoint_exists_and_handles_cleanup(self):
         entrypoint = self.root / "docker" / "entrypoint.sh"

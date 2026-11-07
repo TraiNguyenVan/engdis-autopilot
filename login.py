@@ -105,8 +105,8 @@ def login(t, force=False):
     """Log in. Returns True on success."""
     u, p = creds()
     if not u or not p:
-        print("login: CREDS-MISSING — write two lines to %s (chmod 600) "
-              "or set ED_USER/ED_PASS" % CRED)
+        print("login: CREDS-MISSING — set ED_USER and ED_PASS "
+              "(or set ED_CRED path)")
         return False
 
     if not force and logged_in(t):

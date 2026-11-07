@@ -15,7 +15,7 @@ class TestConfig(unittest.TestCase):
             self.assertEqual(config.LLM_MODELS, ["gpt-4o-mini"])
             self.assertEqual(config.SCRATCH, "/opt/data/cache/scratch/ed22u1")
             self.assertEqual(config.REPORT_DIR, ".")
-            self.assertEqual(config.CRED_PATH, "/opt/data/.config/engdis/cred")
+            self.assertEqual(config.CRED_PATH, "")
             self.assertEqual(config.DRY_RUN, False)
 
     def test_custom_env_openai(self):
