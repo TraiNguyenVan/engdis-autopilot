@@ -161,7 +161,7 @@ def handle_test(t, src):
     sub = q(t, "return document.querySelector('.learning__submitTestLink')?1:0;")
     if sub and total and counter == total:
         click(t, ".learning__submitTestLink")
-        t.js("const a=document.querySelector('.learning__submitTestLink'); if(a) angular.element(a).triggerHandler('click');")
+        t.js("(() => {const a=document.querySelector('.learning__submitTestLink'); if(a) angular.element(a).triggerHandler('click');})()")
         poll.wait_until(
             lambda: q(t, "return (document.querySelector('iframe#colorBoxIframe') || document.querySelector('#colorbox') || document.querySelector('.modal'))?1:0;"),
             lambda v: v == 1, timeout=8.0, interval=0.2)
