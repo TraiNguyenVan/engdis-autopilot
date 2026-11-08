@@ -49,6 +49,19 @@ The English Discoveries courseware (ED22 / PTIT LMS) is an Angular SPA backed by
 - **Cause**: Sequence items in `.sequenceZone` start pre-filled across target slots without a staging bank.
 - **Fix**: Query item ordering, resolve target permutation via LLM, and execute `t.drag_xy` directly between slot coordinate centers with fresh box model measurements between drops.
 
+### Autonomous Yield Protocol (`rc=6`)
+When an exercise stalls (4 unchanged ticks), `auto.py` dumps a fixture and exits with `rc=6`:
+```text
+[AGENT-ACTION-REQUIRED]
+Task stalled on Lesson 2: Tech Start-up Hub (Practice, Task 10).
+Fixture: logs/fixtures/stuck_Lesson_2__Tech_Start_up_Hub_10_20261108_015841.json
+1. Read fixture JSON to inspect DOM HTML and compState.
+2. Add a reproducer test in tests/ and patch solver.py or auto.py.
+3. Run 'python3 -m unittest discover -s tests' to verify.
+4. Re-run lesson: python3 cover.py <unit> 1 --lesson="Tech Start-up Hub"
+```
+Because the terminal command exits, your session wakes up immediately. Follow the 4 steps, re-run the exact lesson, and proceed.
+
 ---
 
 ## 4. Operational Commands Cheat-Sheet

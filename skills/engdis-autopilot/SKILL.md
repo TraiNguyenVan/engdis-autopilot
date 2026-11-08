@@ -118,6 +118,21 @@ Never open ad-hoc WebSocket connections to CDP port 9225 while `cover.py` or `au
 ### 9. Test Score Screen Auto-Advance
 When assessment displays `"Your test score is: 100%"` or `"Review your answers"`, do not retry questions. Click the next arrow button (`.arrow-right`, `.nextStepArrow`) or invoke `solver.set_next_step()` to complete lesson handoff.
 
+### 10. Autonomous Agent Yield & Hot-Fix Protocol
+When `auto.py` detects an unsolved exercise stall (4 unchanged ticks):
+1. It dumps the complete DOM, Angular state, and screenshot to `logs/fixtures/stuck_*.json`.
+2. Emits an actionable `[AGENT-ACTION-REQUIRED]` block to `stderr`.
+3. Exits with code `rc=6`.
+
+If you are a coding agent executing the harness via terminal:
+- The command finish returns control immediately to your active chat turn.
+- Read the fixture path printed in the error block.
+- Follow the 4-step remediation loop:
+  1. Inspect fixture DOM and `compState`.
+  2. Add reproducer test in `tests/test_stuck_cases.py`.
+  3. Patch `solver.py` or `auto.py`.
+  4. Run `python3 -m unittest discover -s tests` and re-run with `--lesson="..."`.
+
 ## Verification
 
 Run the offline mock test suite:
