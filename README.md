@@ -11,11 +11,7 @@ Automated browser testing and exercise solver harness for English Discoveries co
 ### 1. Setup
 ```bash
 cp .env.example .env
-# Set OPENAI_API_KEY, OPENAI_BASE_URL, and OPENAI_MODEL in .env
-
-mkdir -p ~/.config/engdis
-printf "%s\n%s\n" "your_student_id" "your_password" > ~/.config/engdis/cred
-chmod 600 ~/.config/engdis/cred
+# Set credentials (ED_USER, ED_PASS) and LLM config (OPENAI_API_KEY, OPENAI_BASE_URL, OPENAI_MODEL) in .env
 
 docker compose build
 ```

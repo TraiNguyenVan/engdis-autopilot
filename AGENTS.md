@@ -6,10 +6,11 @@ Instructions, conventions, and operational patterns for AI coding agents (Claude
 
 ## 1. Core Operating Principles
 
-1. **Zero Chat-Token Burn**: Never run supervisor loops interactively in conversation turns. Always launch batches as non-blocking background tasks and report only final completion status or actionable blockers.
-2. **Single-Owner Browser Rule**: Never open ad-hoc WebSocket connections to CDP port 9225 while a background `cover.py` or `auto.py` process is active. Concurrent DevTools connections cause CDP packet drops, tab race conditions, and runner timeouts.
-3. **Reproduce via Offline Fixtures First**: When an exercise stalls, inspect auto-dumped state in `logs/fixtures/stuck_*.json`. Write a mock unit test in `tests/` recreating the task DOM before editing `solver.py` or `auto.py`.
-4. **Mandatory Test Suite Gate**: Run `python3 -m unittest discover -s tests` before committing any changes. All 58+ tests must pass.
+1. **Top-Level Configuration**: Supply credentials and LLM settings via `.env` (`ED_USER`, `ED_PASS`, `OPENAI_API_KEY`, `OPENAI_BASE_URL`, `OPENAI_MODEL`).
+2. **Zero Chat-Token Burn**: Never run supervisor loops interactively in conversation turns. Always launch batches as non-blocking background tasks and report only final completion status or actionable blockers.
+3. **Single-Owner Browser Rule**: Never open ad-hoc WebSocket connections to CDP port 9225 while a background `cover.py` or `auto.py` process is active. Concurrent DevTools connections cause CDP packet drops, tab race conditions, and runner timeouts.
+4. **Reproduce via Offline Fixtures First**: When an exercise stalls, inspect auto-dumped state in `logs/fixtures/stuck_*.json`. Write a mock unit test in `tests/` recreating the task DOM before editing `solver.py` or `auto.py`.
+5. **Mandatory Test Suite Gate**: Run `python3 -m unittest discover -s tests` before committing any changes. All 58+ tests must pass.
 
 ---
 

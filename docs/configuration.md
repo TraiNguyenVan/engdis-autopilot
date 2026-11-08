@@ -6,16 +6,18 @@ All parameters are configured via environment variables and can be supplied via 
 
 | Variable | Default | Purpose |
 | :--- | :--- | :--- |
-| `ED_COURSE` | *(empty)* | Course name, shorthand, or ID to select before running (e.g. `"Advanced 3"`, `a3`, `45742`). Defaults to currently active course. |
+| `ED_USER` | *(empty)* | LMS student username/ID. Top priority auth method. |
+| `ED_PASS` | *(empty)* | LMS password. |
+| `OPENAI_API_KEY` | *(empty)* | API key / token for LLM reasoning and multimodal tasks. |
+| `OPENAI_BASE_URL` | `https://api.openai.com/v1` | OpenAI-compatible endpoint URL. |
+| `OPENAI_MODEL` | `gpt-4o-mini` | Model name (or comma-separated fallback chain). |
+| `ED_COURSE` | *(empty)* | Course name, shorthand, or ID to select before running (e.g. `a3`, `45742`). Defaults to currently active course. |
 | `ED_UNIT` / `ED_UNITS` | `0` | Course unit(s) to process. Accepts single (`8`), range (`8-9`, `8..9`), list (`7,8,9`), or `all`. |
 | `ED_PASSES` | `1` | Number of execution passes per unit (default: `1` in Docker, `2` on CLI) |
 | `ED_DRY_RUN` | `1` | `1` or `true` for dry-run simulation mode |
 | `ED_SKIP` | *(empty)* | Case-insensitive substring filter to skip matching lessons (e.g. `Apologize`, `Speech`) |
 | `ED_CDP_PORT` | `9225` | Chrome remote debugging port |
-| `OPENAI_BASE_URL` | `https://api.openai.com/v1` | OpenAI-compatible endpoint URL |
-| `OPENAI_API_KEY` | *(empty)* | API key / token for LLM calls |
-| `OPENAI_MODEL` | `gpt-4o-mini` | Model name (or comma-separated fallback chain) |
-| `ED_CRED` | `/run/secrets/engdis_cred` | Path to credentials file (`username\npassword`) |
+| `ED_CRED` | *(empty)* | Optional path to credentials file (`username\npassword`). Alternative to `ED_USER`/`ED_PASS`. |
 | `ED_SCRATCH` | `/data/cache` | Scratch directory for TTS audio and temp files |
 | `ED_REPORT_DIR` | `/data/reports` | Directory where JSON run reports are written |
 
