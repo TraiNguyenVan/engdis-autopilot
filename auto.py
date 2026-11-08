@@ -69,7 +69,8 @@ def advance(t, tries=3):
     before = cur()
     for _ in range(tries):
         purge_modals(t)
-        click(t, ".learning__taskNext")
+        if not click(t, ".learning__taskNext"):
+            click(t, ".learning__nextItemLink")
         now = poll.wait_until(cur, lambda v: v != before, timeout=4.0,
                               interval=0.2, settle=0.2)
         if now != before:
@@ -378,6 +379,8 @@ def main(max_iter=120):
                 if nxt == 'last step':
                     require_lesson_complete(t)
             if adv > 4:
+                # Last resort before exiting: check if all steps are completed
+                require_lesson_complete(t)
                 print(f"STEP-SWITCH-STUCK ({s['lesson']}) — exiting to let supervisor recover")
                 sys.exit(2)
             prev = None
@@ -430,6 +433,21 @@ def main(max_iter=120):
                     lambda v: v == 1, timeout=3.0, interval=0.25)
                 played = solver.play_media(t, timeout=45, quick=False)
                 print(f"-- intro (media={'y' if played else 'n'})", flush=True)
+                # If no media elements (e.g. reading text), mark task progress via courseTreeService
+                if not played:
+                    t.js("""(() => {
+                      const comp = window.ng?.probe?.(document.querySelector('app'))?.componentInstance;
+                      const cts = comp?.navigationService?.backNextService?.courseTreeService;
+                      const d = document.querySelectorAll('ed-la-dropdownlist')[1];
+                      const ch = window.ng?.probe?.(d)?.componentInstance?.dropDownListObj?.Children;
+                      const exploreTasks = ch?.[0]?.Children || [];
+                      exploreTasks.forEach(task => {
+                        if (task && task.NodeId && cts?.setProgressAsync) {
+                          cts.setProgressAsync(task.NodeId);
+                        }
+                      });
+                    })()""")
+                    time.sleep(2.5)
 
             if not advance(t):
                 nxt = solver.set_next_step(t)

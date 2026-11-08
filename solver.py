@@ -751,7 +751,7 @@ def set_next_step(t):
       }
 
       // Fallback DOM clicks
-      const arrow = document.querySelector('.arrow-right, .nextStepArrow, a.learning__stepNext');
+      const arrow = document.querySelector('.arrow-right, .nextStepArrow, a.learning__stepNext, .learning__nextItemLink, .learning__taskNext');
       if (arrow) {
         arrow.click();
         return 'via arrow click';
