@@ -119,10 +119,14 @@ Never open ad-hoc WebSocket connections to CDP port 9225 while `cover.py` or `au
 When assessment displays `"Your test score is: 100%"` or `"Review your answers"`, do not retry questions. Click the next arrow button (`.arrow-right`, `.nextStepArrow`) or invoke `solver.set_next_step()` to complete lesson handoff.
 
 ### 10. Autonomous Agent Yield & Hot-Fix Protocol
-When `auto.py` detects an unsolved exercise stall (4 unchanged ticks):
-1. It dumps the complete DOM, Angular state, and screenshot to `logs/fixtures/stuck_*.json`.
-2. In **Agent Yield mode** (default), emits an actionable `[AGENT-ACTION-REQUIRED]` block to `stderr` and exits `rc=6`. The supervisor aborts immediately to wake the agent.
-3. In **Unattended mode** (`--unattended` flag or `ED_UNATTENDED=1`), logs the warning, skips the task, and exits `rc=0` so the batch supervisor continues uninterrupted.
+The harness halts and signals coding agents with exit code `rc=6` and an actionable `[AGENT-ACTION-REQUIRED]` block on `stderr` when:
+1. **Exercise Stall**: Any exercise fails to advance for 4 consecutive ticks. DOM HTML, Angular `compState`, and base64 PNG screenshot are dumped to `logs/fixtures/stuck_*.json`.
+2. **Under-Completion Gate**: The supervisor batch finishes, but one or more lessons remain `< 100%` complete.
+
+**Fast-Forward Resumption**:
+When targeted to fix an incomplete lesson (`--lesson="..."`), `auto.py` reads the step progress from `ed-la-dropdownlist` and automatically fast-forwards directly to the first incomplete step, preserving already completed work and saving tokens.
+
+- In **Unattended mode** (`--unattended` flag or `ED_UNATTENDED=1`), stalls and under-completions are logged, and the harness exits `rc=0` without blocking.
 
 If you are a coding agent executing the harness via terminal:
 - The command finish returns control immediately to your active chat turn.

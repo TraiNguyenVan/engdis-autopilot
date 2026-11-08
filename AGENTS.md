@@ -50,20 +50,22 @@ The English Discoveries courseware (ED22 / PTIT LMS) is an Angular SPA backed by
 - **Fix**: Query item ordering, resolve target permutation via LLM, and execute `t.drag_xy` directly between slot coordinate centers with fresh box model measurements between drops.
 
 ### Autonomous Yield Protocol (`rc=6`) & Unattended Mode
-When an exercise stalls (4 unchanged ticks), `auto.py` dumps a fixture.
-- In **Agent Yield mode** (default), it emits `[AGENT-ACTION-REQUIRED]` to `stderr` and exits with `rc=6`:
+The harness signals coding agents via `rc=6` and `[AGENT-ACTION-REQUIRED]` on `stderr` under two failure conditions:
+
+1. **Exercise Stall**: If a task does not advance after 4 unchanged ticks, `auto.py` dumps full DOM/compState/screenshot to `logs/fixtures/stuck_*.json`, emits `[AGENT-ACTION-REQUIRED]`, and exits `rc=6`.
+2. **Under-Completion Gate**: At the end of a batch, if any lesson finished below 100% progress (and wasn't skipped due to microphone permissions), `cover.py` lists the incomplete lessons, emits `[AGENT-ACTION-REQUIRED]`, and exits `rc=6`.
+
 ```text
 [AGENT-ACTION-REQUIRED]
-Task stalled on Lesson 2: Tech Start-up Hub (Practice, Task 10).
-Fixture: logs/fixtures/stuck_Lesson_2__Tech_Start_up_Hub_10_20261108_015841.json
-1. Read fixture JSON to inspect DOM HTML and compState.
-2. Add a reproducer test in tests/ and patch solver.py or auto.py.
-3. Run 'python3 -m unittest discover -s tests' to verify.
-4. Re-run lesson: python3 cover.py <unit> 1 --lesson="Tech Start-up Hub"
+Batch finished with incomplete lesson(s):
+- Unit 5: Truth And Lies -> News (33%)
+Re-run with targeted lesson command to finish.
 ```
-Because `cover.py` immediately halts on `rc=6`, your agent session wakes up instantly. Follow the 4 steps, re-run the exact lesson, and proceed.
 
-- In **Unattended mode** (`--unattended` or `ED_UNATTENDED=1`), it logs the stall, dumps the fixture for later inspection, skips the task, and continues the batch without terminating.
+**Fast-Forward Resumption**:
+When retrying an incomplete lesson, `auto.py` automatically checks step progress and fast-forwards directly to the first incomplete step (e.g. skipping passed Explore media or Practice), preventing wasted tokens or redundant work.
+
+- In **Unattended mode** (`--unattended` or `ED_UNATTENDED=1`), stalls and incomplete lessons are logged to report JSON and the batch exits `rc=0` without waking the agent.
 
 ---
 
