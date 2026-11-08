@@ -1,7 +1,7 @@
 ---
 name: engdis-autopilot
 description: Operate and debug Engdis courseware automation harness.
-version: 0.1.0
+version: 0.2.0
 author: Trai Nguyen (TraiNguyenVan), Hermes Agent
 license: MIT
 platforms: [linux, macos]
@@ -71,18 +71,40 @@ document.querySelectorAll('audio,video').forEach(m => {
 });
 ```
 This triggers server completion beacons in 2–4 seconds instead of waiting full media duration.
+If Step 1 Explore shows `Progress >= 0.999`, skip media replay immediately and switch to Step 2 Practice via dropdown `solver.set_step(t, 1)`.
 
-### 3. Speaking Gates
-Interactive speaking tasks (Interact 1 / 2) require microphone input.
-With `--use-fake-device-for-media-stream`, click **Start**, wait 3.5s for the fake audio stream, and let the speech session register the attempt. The server marks the step completed once an attempt is recorded.
+### 3. Speaking Gates & Fake Stream Simulation
+Interactive speaking tasks (`Interact 1` / `Practice 1`) require audio input.
+With `--use-fake-device-for-media-stream`:
+1. Click `.button.continue` / `Start`.
+2. Wait 3.5s while streaming fake audio.
+3. Verify task counter changes or `done=True`.
+If microphone error 505 or repeated `Try again` occurs, record as `SPEAK-BLOCKED` (rc=3) to prevent burning supervisor restart budgets.
 
 ### 4. Course Navigation Drift Guard
-When recovering from modal locks via `t.goto(HOME)`, always ensure the active course matches `ED_COURSE`:
+When recovering from modal locks or step-switch stalls via `t.goto(HOME)`, always verify and re-bind active course:
 ```python
 target_course = os.environ.get("ED_COURSE") or config.ED_COURSE
 if target_course:
     cover.ensure_course(t, target_course)
 ```
+Pass `ED_COURSE` down to all child worker subprocesses to avoid dropping back to Unit 1 of Advanced 1 (`rc=4 UNIT-CHANGED`).
+
+### 5. DOM Transcript Extraction Before LLM ASR
+Always inspect `#textContainer`, `.seeTextContainer`, and `.learning__RATextW` before invoking audio transcription. Video and listening tasks frequently embed full transcripts in the markup. Extracting DOM text avoids ASR timeouts and saves token budget.
+
+### 6. Typed / Open-Ended Task Registration
+Assigning `.value` alone does not count towards activity completion. Angular open-ended text areas require keyboard triggers:
+1. Focus textarea: `ta.focus()`.
+2. Insert text: CDP `Input.insertText`.
+3. Dispatch keyup: `ta.dispatchEvent(new KeyboardEvent('keyup', {bubbles: true}))`.
+Verify `componentInstance.doneProgress === true`.
+
+### 7. Sequence Reordering Widgets
+Widgets using `.sequenceZone` / `.prSeq__zone--txt` start with items pre-filled across target zones with no bank placeholder. Use `solve_sequence(t, src)` to extract order, query 1-based order array, and perform direct CDP drags (`t.drag_xy`) between zone centers with fresh rect measurements between drops.
+
+### 8. Single-Owner Browser Rule
+Never open ad-hoc WebSocket connections to CDP port 9225 while `cover.py` or `auto.py` is running in the background. Concurrent connections lock the DevTools loop and cause command timeouts. Read status non-invasively via `status.py`, `live_status.json`, or log tails.
 
 ## Verification
 

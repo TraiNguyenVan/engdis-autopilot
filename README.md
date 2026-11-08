@@ -6,6 +6,63 @@ Automated browser testing and exercise solver harness for English Discoveries co
 
 ---
 
+## Agent Operations & Example Prompts
+
+This repository is optimized for autonomous AI coding agents (Hermes, Claude Code, Codex, Antigravity, OpenClaw).
+
+### Loading the In-Repo Skill
+If your agent environment supports skills, load the bundled operational skill directly:
+- **Skill File**: `skills/engdis-autopilot/SKILL.md`
+
+### Example Prompts for AI Agents
+Copy-paste these task prompts when delegating to an AI coding agent:
+
+#### 1. Unattended Background Course Run
+```text
+Run the background supervisor for course "Advanced 3", covering Units 5 through 9 with 2 passes. Launch the process as a background task, minimize chat interactions to conserve LLM tokens, and report back only the final completion percentage and any stalled units.
+```
+
+#### 2. Debug & Fix Stalled Tasks from Fixtures
+```text
+The autopilot stalled on a lesson. Inspect the latest JSON dump in `logs/fixtures/stuck_*.json`. Analyze the recorded DOM HTML and task type, identify why the current solver in `solver.py` or `auto.py` failed to click or answer, add a reproducer test in `tests/`, patch the logic, and verify against the test suite.
+```
+
+#### 3. Targeted Single-Lesson Remediation
+```text
+Re-run only the failing test in "Unit 2: Overcoming Difficulties", lesson "A Bit Deaf". Use the test-only flag `--test-only` to avoid re-running already completed explore steps. Confirm the final exit code is 0.
+```
+
+### Autonomous Operating Protocol
+When an agent is tasked with running or fixing courses, follow this loop:
+
+1. **Launch Non-Blocking Background Batch**:
+   Run supervisor in background to avoid consuming chat context tokens:
+   ```bash
+   python3 -u cover.py 5-9 2 --course="Advanced 3"
+   ```
+2. **Inspect Fixtures on Stall**:
+   When exercises cannot be solved or reach 4 unchanged ticks, the harness auto-dumps task state to:
+   ```bash
+   ls -lt logs/fixtures/stuck_*.json
+   ```
+   Inspect `body` and `html` in the JSON fixture to identify missing DOM selectors or task types without needing a live browser session.
+3. **Targeted Remediation & Re-run**:
+   Isolate and verify the fix on the exact failing lesson and step:
+   ```bash
+   # Test-only pass
+   python3 cover.py 1 1 --course="Advanced 3" --test-only
+
+   # Step-specific pass
+   python3 cover.py 1 1 --course="Advanced 3" --step="Practice"
+   ```
+4. **Offline Test Suite Gate**:
+   Always run the unit test suite before pushing patches:
+   ```bash
+   python3 -m unittest discover -s tests
+   ```
+
+---
+
 ## Key Features
 
 - **CDP Automation**: Direct DOM instrumentation, interaction simulation, and navigation over Chrome DevTools Protocol.
@@ -84,63 +141,6 @@ python3 cover.py 1 1 --course="Advanced 3" --test-only
 │   └── spikes/            # Archived exploratory spikes and reverse-engineering probes
 └── tests/                 # Unit and container test suite
 ```
-
----
-
-## Agent Operations
-
-This repository is optimized for autonomous AI coding agents (Hermes, Claude Code, Codex, Antigravity, OpenClaw).
-
-### Loading the In-Repo Skill
-If your agent environment supports skills, load the bundled operational skill directly:
-- **Skill File**: `skills/engdis-autopilot/SKILL.md`
-
-### Example Prompts for AI Agents
-Copy-paste these task prompts when delegating to an AI coding agent:
-
-#### 1. Unattended Background Course Run
-```text
-Run the background supervisor for course "Advanced 3", covering Units 5 through 9 with 2 passes. Launch the process as a background task, minimize chat interactions to conserve LLM tokens, and report back only the final completion percentage and any stalled units.
-```
-
-#### 2. Debug & Fix Stalled Tasks from Fixtures
-```text
-The autopilot stalled on a lesson. Inspect the latest JSON dump in `logs/fixtures/stuck_*.json`. Analyze the recorded DOM HTML and task type, identify why the current solver in `solver.py` or `auto.py` failed to click or answer, add a reproducer test in `tests/`, patch the logic, and verify against the test suite.
-```
-
-#### 3. Targeted Single-Lesson Remediation
-```text
-Re-run only the failing test in "Unit 2: Overcoming Difficulties", lesson "A Bit Deaf". Use the test-only flag `--test-only` to avoid re-running already completed explore steps. Confirm the final exit code is 0.
-```
-
-### Autonomous Operating Protocol
-When an agent is tasked with running or fixing courses, follow this loop:
-
-1. **Launch Non-Blocking Background Batch**:
-   Run supervisor in background to avoid consuming chat context tokens:
-   ```bash
-   python3 -u cover.py 5-9 2 --course="Advanced 3"
-   ```
-2. **Inspect Fixtures on Stall**:
-   When exercises cannot be solved or reach 4 unchanged ticks, the harness auto-dumps task state to:
-   ```bash
-   ls -lt logs/fixtures/stuck_*.json
-   ```
-   Inspect `body` and `html` in the JSON fixture to identify missing DOM selectors or task types without needing a live browser session.
-3. **Targeted Remediation & Re-run**:
-   Isolate and verify the fix on the exact failing lesson and step:
-   ```bash
-   # Test-only pass
-   python3 cover.py 1 1 --course="Advanced 3" --test-only
-
-   # Step-specific pass
-   python3 cover.py 1 1 --course="Advanced 3" --step="Practice"
-   ```
-4. **Offline Test Suite Gate**:
-   Always run the unit test suite before pushing patches:
-   ```bash
-   python3 -m unittest discover -s tests
-   ```
 
 ---
 
