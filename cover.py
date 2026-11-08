@@ -409,6 +409,9 @@ def cover_unit(t, unit_i, passes=2, dry=False, skips=None, target_course=None,
                 extra_env["ED_TARGET_STEP"] = "Test"
             rc, tail, dur = run_lesson(l["name"], extra_env=extra_env if extra_env else None)
             print(f"   rc={rc} {dur}s | " + " / ".join(tail[-2:]), flush=True)
+            if rc == 6:
+                print(f"\n[AGENT-ACTION-REQUIRED]\nBatch halted on {l['name']} (rc=6 STUCK). See fixture above.", file=sys.stderr, flush=True)
+                sys.exit(6)
             if rc == 5:
                 print("   lesson finished (lesson-lock exit)", flush=True)
             if rc == 3:

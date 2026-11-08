@@ -346,15 +346,8 @@ def main(max_iter=120):
                 if nxt == 'last step':
                     require_lesson_complete(t)
             if adv > 4:
-                print(f"STEP-SWITCH-STUCK ({s['lesson']}) — returning to home to clear lock")
-                t.goto("https://ed22.engdis.com/ptithcm#/home", wait=4)
-                target_course = os.environ.get("ED_COURSE") or config.ED_COURSE
-                if target_course:
-                    try:
-                        cover.ensure_course(t, target_course)
-                    except Exception:
-                        pass
-                adv_tries.clear()
+                print(f"STEP-SWITCH-STUCK ({s['lesson']}) — exiting to let supervisor recover")
+                sys.exit(2)
             prev = None
             continue
 
