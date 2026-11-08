@@ -444,9 +444,10 @@ def main(max_iter=120):
                   if(document.querySelectorAll('.lessonMultipleAnswer').length) return 'multi';
                   if(document.querySelectorAll('.dnditem').length && document.querySelectorAll('.dndZone').length) return 'drag';
                   if(window.tinymce && tinymce.activeEditor) return 'write';
+                  if(document.querySelector('.writingEditFrame, textarea.writingTextarea, .OpenEndedQ')) return 'write';
                   const a=[...document.querySelectorAll('a.button.continue,button.button.continue,input.button.continue,button,input[type=button]')]
                     .map(e=>(e.innerText||e.value||'').trim());
-                  if(a.includes('Start') || document.querySelector('.openSpeech__btnStart, .openSpeech__btn')) return 'speak';
+                  if(a.includes('Start') || document.querySelector('.openSpeech__btnStart, .openSpeech__btn, .speakingInteract')) return 'speak';
                   return 'other';
                 })()""")
                 if kind == "speak":
