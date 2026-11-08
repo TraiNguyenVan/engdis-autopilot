@@ -27,7 +27,8 @@ ED_COURSE="Advanced 3" ED_UNIT=0 ED_DRY_RUN=0 docker compose run --rm engdis
 ED_COURSE="Advanced 3" ED_UNIT=5-9 ED_PASSES=2 ED_DRY_RUN=0 docker compose run --rm engdis
 
 # Host CLI (requires local Chromium + FFmpeg)
-python3 cover.py 5-9 2 --course="Advanced 3"
+python3 cover.py 5-9 2 --course="Advanced 3"               # Autonomous yield mode (rc=6 on stalls)
+python3 cover.py 5-9 2 --course="Advanced 3" --unattended  # Unattended mode (skips stalls, keeps running)
 python3 cover.py 1 1 --course="Advanced 3" --test-only
 ```
 
@@ -54,9 +55,10 @@ Compatible with [Agent Skills](https://agentskills.io) (Claude Code, Cursor, Cop
 <summary><b>Agent Operating Protocol</b> (click to expand)</summary>
 
 1. **Background Batch**: Launch `cover.py` in background to prevent chat context token burn.
-2. **Inspect Fixtures**: When stalled (4 unchanged ticks), inspect `logs/fixtures/stuck_*.json` for task `body` and `html`.
-3. **Targeted Fix**: Isolate fix with `--lesson="..."`, `--step="..."`, or `--test-only`.
-4. **Test Gate**: Run `python3 -m unittest discover -s tests` before pushing.
+2. **Autonomous Yield Protocol (`rc=6`)**: When an exercise stalls (4 unchanged ticks), `auto.py` dumps fixture JSON + screenshot to `logs/fixtures/stuck_*.json`, emits `[AGENT-ACTION-REQUIRED]` to `stderr`, and exits with `rc=6`. The supervisor propagates `rc=6` and terminates immediately to wake the agent.
+3. **Unattended Execution Mode**: Pass `--unattended` or set `ED_UNATTENDED=1` for headless overnight runs without an agent. Stalls will still dump fixtures but log a warning, skip the stalled task, and continue the batch without exiting.
+4. **Targeted Fix**: Isolate fix with `--lesson="..."`, `--step="..."`, or `--test-only`.
+5. **Test Gate**: Run `python3 -m unittest discover -s tests` before pushing.
 </details>
 
 ---
@@ -108,7 +110,7 @@ flowchart TD
 - **Multimodal LLM Solvers**: Solves text, multiple-choice, fill-in-the-blank, and drag-and-drop tasks using OpenAI-compatible endpoints.
 - **Unified Audio Transcription**: Transcribes listening exercises via base64 audio chat completions—no separate Whisper service needed.
 - **Low-RAM Containment**: Strict container limits (1280 MB RAM, 256 MB SHM) and Chromium heap capping for low-spec hosts.
-- **Dual Execution Modes**: Unattended autonomous execution with watchdog recovery, plus operator diagnostic capture.
+- **Dual Execution Modes**: Autonomous Agent Yield mode (`rc=6` on stalls) for interactive agent pairing, plus Unattended mode (`--unattended` / `ED_UNATTENDED=1`) for headless non-blocking runs.
 
 ---
 

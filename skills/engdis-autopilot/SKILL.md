@@ -121,8 +121,8 @@ When assessment displays `"Your test score is: 100%"` or `"Review your answers"`
 ### 10. Autonomous Agent Yield & Hot-Fix Protocol
 When `auto.py` detects an unsolved exercise stall (4 unchanged ticks):
 1. It dumps the complete DOM, Angular state, and screenshot to `logs/fixtures/stuck_*.json`.
-2. Emits an actionable `[AGENT-ACTION-REQUIRED]` block to `stderr`.
-3. Exits with code `rc=6`.
+2. In **Agent Yield mode** (default), emits an actionable `[AGENT-ACTION-REQUIRED]` block to `stderr` and exits `rc=6`. The supervisor aborts immediately to wake the agent.
+3. In **Unattended mode** (`--unattended` flag or `ED_UNATTENDED=1`), logs the warning, skips the task, and exits `rc=0` so the batch supervisor continues uninterrupted.
 
 If you are a coding agent executing the harness via terminal:
 - The command finish returns control immediately to your active chat turn.

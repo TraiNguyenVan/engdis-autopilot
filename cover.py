@@ -345,7 +345,7 @@ def filter_lessons(lessons: list[dict], lesson_spec: str | None = None, test_onl
 
 
 def cover_unit(t, unit_i, passes=2, dry=False, skips=None, target_course=None,
-               lesson_spec=None, test_only=False, target_step=None):
+               lesson_spec=None, test_only=False, target_step=None, unattended=False):
     skips = skips or []
     if target_course:
         try:
@@ -403,6 +403,8 @@ def cover_unit(t, unit_i, passes=2, dry=False, skips=None, target_course=None,
             extra_env = {}
             if target_course:
                 extra_env["ED_COURSE"] = target_course
+            if unattended:
+                extra_env["ED_UNATTENDED"] = "1"
             if target_step:
                 extra_env["ED_TARGET_STEP"] = target_step
             elif test_only:
@@ -465,6 +467,7 @@ def main():
     lesson_spec = next((f.split("=", 1)[1] for f in flags if f.startswith("--lesson=")), None)
     target_step = next((f.split("=", 1)[1] for f in flags if f.startswith("--step=")), None)
     test_only = "--test-only" in flags
+    unattended = "--unattended" in flags or os.environ.get("ED_UNATTENDED") == "1"
 
     target_course = None
     for f in flags:
@@ -492,7 +495,7 @@ def main():
 
     c_info = f"[{h.get('course')}] " if h.get("course") else ""
     target_units = parse_unit_specs(raw_spec, total_units=len(h["units"]))
-    print(f"{c_info}Target units: {target_units} (passes={passes}, dry={dry}, skips={skips}, lesson={lesson_spec}, test_only={test_only}, step={target_step})")
+    print(f"{c_info}Target units: {target_units} (passes={passes}, dry={dry}, skips={skips}, lesson={lesson_spec}, test_only={test_only}, step={target_step}, unattended={unattended})")
 
     all_reports = []
     for u_idx in target_units:
@@ -500,7 +503,7 @@ def main():
             print("STOP file present, stopping multi-unit walk")
             break
         rep = cover_unit(t, u_idx, passes=passes, dry=dry, skips=skips, target_course=target_course,
-                         lesson_spec=lesson_spec, test_only=test_only, target_step=target_step)
+                         lesson_spec=lesson_spec, test_only=test_only, target_step=target_step, unattended=unattended)
         if rep:
             all_reports.append(rep)
 

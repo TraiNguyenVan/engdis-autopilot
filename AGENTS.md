@@ -49,8 +49,9 @@ The English Discoveries courseware (ED22 / PTIT LMS) is an Angular SPA backed by
 - **Cause**: Sequence items in `.sequenceZone` start pre-filled across target slots without a staging bank.
 - **Fix**: Query item ordering, resolve target permutation via LLM, and execute `t.drag_xy` directly between slot coordinate centers with fresh box model measurements between drops.
 
-### Autonomous Yield Protocol (`rc=6`)
-When an exercise stalls (4 unchanged ticks), `auto.py` dumps a fixture and exits with `rc=6`:
+### Autonomous Yield Protocol (`rc=6`) & Unattended Mode
+When an exercise stalls (4 unchanged ticks), `auto.py` dumps a fixture.
+- In **Agent Yield mode** (default), it emits `[AGENT-ACTION-REQUIRED]` to `stderr` and exits with `rc=6`:
 ```text
 [AGENT-ACTION-REQUIRED]
 Task stalled on Lesson 2: Tech Start-up Hub (Practice, Task 10).
@@ -60,28 +61,33 @@ Fixture: logs/fixtures/stuck_Lesson_2__Tech_Start_up_Hub_10_20261108_015841.json
 3. Run 'python3 -m unittest discover -s tests' to verify.
 4. Re-run lesson: python3 cover.py <unit> 1 --lesson="Tech Start-up Hub"
 ```
-Because the terminal command exits, your session wakes up immediately. Follow the 4 steps, re-run the exact lesson, and proceed.
+Because `cover.py` immediately halts on `rc=6`, your agent session wakes up instantly. Follow the 4 steps, re-run the exact lesson, and proceed.
+
+- In **Unattended mode** (`--unattended` or `ED_UNATTENDED=1`), it logs the stall, dumps the fixture for later inspection, skips the task, and continues the batch without terminating.
 
 ---
 
 ## 4. Operational Commands Cheat-Sheet
 
 ```bash
-# 1. Background batch run (recommended)
+# 1. Background batch run (Agent Yield mode)
 python3 -u cover.py 5-9 2 --course="Advanced 3"
 
-# 2. Targeted lesson remediation
+# 2. Unattended overnight batch run (skips stalls, continues)
+python3 -u cover.py 5-9 2 --course="Advanced 3" --unattended
+
+# 3. Targeted lesson remediation
 python3 cover.py 1 1 --course="Advanced 3" --lesson="IFL Broadcast"
 
-# 3. Test-only run (skips already passed Explore/Practice)
+# 4. Test-only run (skips already passed Explore/Practice)
 python3 cover.py 1 1 --course="Advanced 3" --test-only
 
-# 4. Dry-run LMS status audit (no changes made)
+# 5. Dry-run LMS status audit (no changes made)
 python3 cover.py 0-9 1 --course="Advanced 3" --dry
 
-# 5. Check stuck task dump
+# 6. Check stuck task dump
 python3 -c 'import json, glob; print(json.load(open(sorted(glob.glob("logs/fixtures/stuck_*.json"))[-1]))["body"][:300])'
 
-# 6. Run test suite
+# 7. Run test suite
 python3 -m unittest discover -s tests
 ```

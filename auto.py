@@ -278,6 +278,12 @@ def main(max_iter=120):
             fix_path = os.path.join(fix_dir, f"stuck_{safe_lesson}_{s.get('counter') or 0}_{ts}.json")
             dumped = solver.dump_task(t, fix_path, meta={"lesson": s.get("lesson"), "step": s.get("step"), "counter": s.get("counter")})
             print(f"STUCK {sig} (dumped: {dumped}) | {s['body'][:120].replace(chr(10), ' ')}")
+
+            is_unattended = os.environ.get("ED_UNATTENDED") == "1" or "--unattended" in sys.argv
+            if is_unattended:
+                print(f"UNATTENDED: skipping stalled task on {s.get('lesson')} to continue batch", file=sys.stderr)
+                sys.exit(0)
+
             print(f"\n[AGENT-ACTION-REQUIRED]\nTask stalled on {s.get('lesson')} ({s.get('step')}, Task {s.get('counter')}).\n"
                   f"Fixture: {dumped}\n"
                   f"1. Read fixture JSON to inspect DOM HTML and compState.\n"
