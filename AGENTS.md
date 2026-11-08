@@ -68,9 +68,9 @@ When retrying an incomplete lesson, `auto.py` automatically checks step progress
 - In **Unattended mode** (`--unattended` or `ED_UNATTENDED=1`), stalls and incomplete lessons are logged to report JSON and the batch exits `rc=0` without waking the agent.
 
 ### Ambiguity Gate (Grill-Me Protocol)
-If user instruction lacks complete precision (e.g., "run it", "test the rest", "fix issues"), **do not execute immediately**.
-Interview user with 1 numbered round presenting recommended choices first:
-1. Target Course & Units (e.g., "Advanced 3", Units 5-9)?
+If user instruction lacks complete precision (e.g., "run it", "test the rest", "fix issues"), **do not execute immediately and do NOT assume course or units**.
+Inspect LMS state first (`docker compose run --rm -e ED_DRY_RUN=1 engdis` or query active course/units), then ask:
+1. Target Course & Units to cover?
 2. Mode: Agent Yield (`rc=6` on stall) vs Unattended (`--unattended`)?
 3. Scope: Full lesson vs `--test-only` vs specific `--lesson`?
 
@@ -78,25 +78,43 @@ Interview user with 1 numbered round presenting recommended choices first:
 
 ## 4. Operational Commands Cheat-Sheet
 
+> **CRITICAL EXECUTION RULE**: The harness requires headless Chromium on port 9225 with fake media stream flags.
+> **NEVER execute `python3 cover.py` directly on the host.**
+> Always run inside Docker via `docker compose run` or `docker exec`.
+
+### Mode A: Production / Unattended Runner (Fresh Container)
+```bash
+# 1. Unattended batch run (specify exact course and units)
+ED_COURSE="<COURSE>" ED_UNITS="<UNITS>" ED_PASSES=2 ED_UNATTENDED=1 docker compose run --rm engdis
+
+# 2. Agent Yield mode (rc=6 on stall)
+ED_COURSE="<COURSE>" ED_UNITS="<UNITS>" ED_PASSES=2 docker compose run --rm engdis
+
+# 3. Dry-run LMS status audit (shows real course progress)
+ED_COURSE="<COURSE>" ED_UNITS="0-9" ED_DRY_RUN=1 docker compose run --rm engdis
+```
+
+### Mode B: Development / Interactive Container (`engdis_inspect`)
+If long-running browser container `engdis_inspect` is active:
 ```bash
 # 1. Background batch run (Agent Yield mode)
-python3 -u cover.py 5-9 2 --course="Advanced 3"
+docker exec engdis_inspect python3 -u cover.py <UNITS> 2 --course="<COURSE>"
 
-# 2. Unattended overnight batch run (skips stalls, continues)
-python3 -u cover.py 5-9 2 --course="Advanced 3" --unattended
+# 2. Unattended batch run
+docker exec engdis_inspect python3 -u cover.py <UNITS> 2 --course="<COURSE>" --unattended
 
 # 3. Targeted lesson remediation
-python3 cover.py 1 1 --course="Advanced 3" --lesson="IFL Broadcast"
+docker exec engdis_inspect python3 cover.py <UNIT_IDX> 1 --course="<COURSE>" --lesson="<LESSON_NAME>"
 
-# 4. Test-only run (skips already passed Explore/Practice)
-python3 cover.py 1 1 --course="Advanced 3" --test-only
+# 4. Dry-run LMS status audit
+docker exec engdis_inspect python3 cover.py 0-9 1 --course="<COURSE>" --dry
+```
 
-# 5. Dry-run LMS status audit (no changes made)
-python3 cover.py 0-9 1 --course="Advanced 3" --dry
-
-# 6. Check stuck task dump
-python3 -c 'import json, glob; print(json.load(open(sorted(glob.glob("logs/fixtures/stuck_*.json"))[-1]))["body"][:300])'
-
-# 7. Run test suite
+### Mode C: Diagnostic & Test Suite (Host OK)
+```bash
+# 1. Run offline unit tests (no browser needed)
 python3 -m unittest discover -s tests
+
+# 2. Check stuck task dump
+python3 -c 'import json, glob; print(json.load(open(sorted(glob.glob("logs/fixtures/stuck_*.json"))[-1]))["body"][:300])'
 ```
