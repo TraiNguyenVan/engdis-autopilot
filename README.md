@@ -64,21 +64,22 @@ See [CONTRIBUTING.md](CONTRIBUTING.md) for contribution guidelines, agent workfl
 
 ```mermaid
 flowchart TD
-    subgraph Host_or_Container [Execution Environment]
+    subgraph Container [Docker Environment - engdis / engdis_inspect]
         Supervisor[cover.py<br/><i>Batch Supervisor</i>]
         Runner[auto.py<br/><i>Task Navigator</i>]
         Solver[solver.py<br/><i>Exercise Solver</i>]
         Driver[driver.py<br/><i>CDP Controller</i>]
-    end
+        Login[login.py<br/><i>LMS Authentication</i>]
 
-    subgraph Browser [Headless Chromium :9225]
-        LMS[English Discoveries SPA<br/><i>Angular / ed22.engdis.com</i>]
-        Media[HTML5 Audio/Video<br/><i>16x Accelerated</i>]
-        FakeAudio[Fake Media Stream<br/><i>Mic Input Simulation</i>]
+        subgraph Browser [Headless Chromium :9225]
+            LMS[English Discoveries SPA<br/><i>Angular / ed22.engdis.com</i>]
+            Media[HTML5 Audio/Video<br/><i>16x Accelerated</i>]
+            FakeAudio[Fake Media Stream<br/><i>Virtual Mic Simulation</i>]
+        end
     end
 
     subgraph LLM_Gateway [OpenAI-Compatible Gateway]
-        LLM[Multimodal LLM / VLM<br/><i>ag/gemini-3.8-flash</i>]
+        LLM[Multimodal LLM / VLM<br/><i>OPENAI_MODEL</i>]
         ASR[Audio Transcription<br/><i>Base64 Chat Completion</i>]
     end
 
@@ -87,7 +88,13 @@ flowchart TD
         Status[(live_status.json<br/><i>Web Dashboard :8080</i>)]
     end
 
+    subgraph Agent [Coding Agent / Human]
+        Yield[Agent Yield Protocol<br/><i>rc=6 + Action Required</i>]
+        Patch[Offline Reproduction<br/><i>tests/test_stuck_cases.py</i>]
+    end
+
     Supervisor -->|spawns worker per lesson| Runner
+    Supervisor -->|ensures valid session| Login
     Runner -->|executes step loop| Solver
     Solver -->|evaluates prompt & choices| LLM
     Solver -->|transcribes listening tasks| ASR
@@ -97,17 +104,21 @@ flowchart TD
     Driver -->|virtual mic stream| FakeAudio
     Runner -->|4 unchanged ticks| Fixtures
     Runner -->|progress heartbeat| Status
+    Runner -->|stalled / under-completion| Yield
+    Yield -->|reproduce & fix| Patch
+    Patch -->|patch solver/auto| Solver
 ```
 
 ---
 
 ## Features
 
-- **CDP Automation**: Direct DOM instrumentation, interaction simulation, and navigation over Chrome DevTools Protocol.
-- **Multimodal LLM Solvers**: Solves text, multiple-choice, fill-in-the-blank, and drag-and-drop tasks using OpenAI-compatible endpoints.
+- **Docker-Enforced CDP Automation**: Direct DOM instrumentation, interaction simulation, and navigation over Chrome DevTools Protocol inside isolated containers.
+- **Multimodal LLM Solvers**: Solves text, multiple-choice, fill-in-the-blank, and drag-and-drop tasks using OpenAI-compatible endpoints (`OPENAI_MODEL`).
 - **Unified Audio Transcription**: Transcribes listening exercises via base64 audio chat completions—no separate Whisper service needed.
 - **Low-RAM Containment**: Strict container limits (1280 MB RAM, 256 MB SHM) and Chromium heap capping for low-spec hosts.
 - **Dual Execution Modes**: Autonomous Agent Yield mode (`rc=6` on stalls) for interactive agent pairing, plus Unattended mode (`--unattended` / `ED_UNATTENDED=1`) for headless non-blocking runs.
+- **Offline Reproducer Protocol**: Exercises that stall dump DOM/compState fixtures, enabling offline unit testing without burning LLM tokens or touching live accounts.
 
 ---
 
@@ -127,11 +138,12 @@ flowchart TD
 ├── bootstrap_browser.py   # Headless Chromium launcher with CDP health polling
 ├── compose.yaml           # Container definition with resource limits
 ├── Dockerfile             # Debian Bookworm container image with Chromium & FFmpeg
+├── CONTRIBUTING.md        # Contribution guide, offline testing protocol & PR gates
 ├── AGENTS.md              # AI coding agent operational patterns, failure modes & cheat-sheet
-├── skills/
-│   └── engdis-autopilot/  # In-repo operational skill (SKILL.md)
+├── .agents/skills/
+│   └── engdis-autopilot/  # Canonical agent skill (SKILL.md)
 ├── docs/                  # Detailed configuration, architecture, and auth guides
-└── tests/                 # Unit and container test suite
+└── tests/                 # Unit and offline fixture test suite
 ```
 </details>
 
