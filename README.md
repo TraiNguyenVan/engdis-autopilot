@@ -43,11 +43,11 @@ Compatible with [Agent Skills](https://agentskills.io) (Claude Code, Cursor, Cop
 - **Unattended Background Run**:
   > `/engdis-autopilot Run background supervisor for "Advanced 3", Units 5-9, 2 passes. Run as background task, minimize chat interactions, and report final completion.`
 - **Fix Stalled Tasks from Fixture**:
-  > `@engdis-autopilot Autopilot stalled on a lesson. Inspect latest JSON in logs/fixtures/stuck_*.json. Check DOM HTML and task type, patch solver.py or auto.py, and verify with tests.`
+  > `/engdis-autopilot Autopilot stalled on a lesson. Inspect latest JSON in logs/fixtures/stuck_*.json. Check DOM HTML and task type, patch solver.py or auto.py, and verify with tests.`
 - **Targeted Single-Lesson Test**:
-  > `$engdis-autopilot Re-run failing test in "Unit 2: Overcoming Difficulties", lesson "A Bit Deaf" with --test-only. Confirm exit code 0.`
+  > `/engdis-autopilot Re-run failing test in "Unit 2: Overcoming Difficulties", lesson "A Bit Deaf" with --test-only. Confirm exit code 0.`
 
-*Syntax supported: `/engdis-autopilot`, `@engdis-autopilot`, `$engdis-autopilot`, or `@skills/engdis-autopilot/SKILL.md`.*
+*Syntax tips: `/engdis-autopilot` is default for Claude Code, Copilot, and Cursor Agent Mode. If your harness prefers mentions or file tags, `@engdis-autopilot`, `$engdis-autopilot`, or `@skills/engdis-autopilot/SKILL.md` also work.*
 </details>
 
 <details>
