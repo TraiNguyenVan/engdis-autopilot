@@ -8,10 +8,11 @@ For detailed contribution protocols, fixture reproduction steps, and PR gates, s
 ## 1. Core Operating Principles
 
 1. **Top-Level Configuration**: Supply credentials and LLM settings via `.env` (`ED_USER`, `ED_PASS`, `OPENAI_API_KEY`, `OPENAI_BASE_URL`, `OPENAI_MODEL`).
-2. **Zero Chat-Token Burn**: Never run supervisor loops interactively in conversation turns. Always launch batches as non-blocking background tasks and report only final completion status or actionable blockers.
-3. **Single-Owner Browser Rule**: Never open ad-hoc WebSocket connections to CDP port 9225 while a background `cover.py` or `auto.py` process is active. Concurrent DevTools connections cause CDP packet drops, tab race conditions, and runner timeouts.
-4. **Reproduce via Offline Fixtures First**: When an exercise stalls, inspect auto-dumped state in `logs/fixtures/stuck_*.json`. Write a mock unit test in `tests/` recreating the task DOM before editing `solver.py` or `auto.py`.
-5. **Mandatory Test Suite Gate**: Run `python3 -m unittest discover -s tests` before committing any changes. All 58+ tests must pass.
+2. **Dual Course Guarantee (Advanced 2 & 3)**: All automation logic, selectors, and solvers must work seamlessly on both Advanced 2 and Advanced 3 curricula without regression. Never remove existing widget handlers.
+3. **Zero Chat-Token Burn**: Never run supervisor loops interactively in conversation turns. Always launch batches as non-blocking background tasks and report only final completion status or actionable blockers.
+4. **Single-Owner Browser Rule**: Never open ad-hoc WebSocket connections to CDP port 9225 while a background `cover.py` or `auto.py` process is active. Concurrent DevTools connections cause CDP packet drops, tab race conditions, and runner timeouts.
+5. **Reproduce via Offline Fixtures First**: When an exercise stalls, inspect auto-dumped state in `logs/fixtures/stuck_*.json`. Write a mock unit test in `tests/` recreating the task DOM before editing `solver.py` or `auto.py`.
+6. **Mandatory Test Suite Gate**: Run `python3 -m unittest discover -s tests` before committing any changes. All 58+ tests must pass.
 
 ---
 

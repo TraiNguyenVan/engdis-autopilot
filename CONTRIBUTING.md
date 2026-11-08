@@ -49,7 +49,26 @@ Ensure all 58+ tests pass with zero network requests.
 
 ---
 
-## 3. Security & Cleanliness Gates
+## 3. Backward Course & Unit Compatibility Rules
+
+The English Discoveries courseware structure evolves across courses and units. **Any contribution must maintain dual compatibility across both Advanced 2 and Advanced 3 (and other supported tiers)**:
+
+1. **Dual Course Guarantee (Advanced 2 & Advanced 3)**:
+   - Never write course-specific hacks or assume a single course tree layout.
+   - Code must function equally well on Advanced 2 (legacy exercises, Dragula widgets, older test layouts) and Advanced 3 (newer Angular components, open-ended writing frames).
+2. **Zero Regression on Earlier Units**:
+   - A selector or logic patch added for Unit 8 or 9 must not break Units 0–7.
+   - Never replace or delete an existing selector that matches an earlier unit's widget; append or branch fallback logic instead.
+3. **Widget Layout Diversity**:
+   - Drag-and-drop: Both `.dndZone` / `.dnditem` and legacy `.prSeq__zone--txt` / Dragula containers must remain supported.
+   - Speaking: Both character-selection interact flows (`a.chooseCaracterArrow`) and direct audio recording gates (`record the correct answer`) must be handled.
+   - Reading/Explore: Media-accelerated listenings and media-less text readings must both trigger progress without hanging.
+4. **Offline Regression Testing**:
+   - Before submitting changes to `solver.py` or `auto.py`, run the full test suite. It includes fixtures covering both Advanced 2 and Advanced 3 interaction patterns.
+
+---
+
+## 4. Security & Cleanliness Gates
 
 We enforce strict security and repository cleanliness gates:
 
@@ -65,7 +84,7 @@ We enforce strict security and repository cleanliness gates:
 
 ---
 
-## 4. Operational Testing (Live Browser in Docker)
+## 5. Operational Testing (Live Browser in Docker)
 
 To verify a fix against the real LMS platform:
 

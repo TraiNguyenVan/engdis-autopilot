@@ -23,6 +23,7 @@ Operational procedures for AI coding agents running, diagnosing, and repairing t
 
 ## Prerequisites
 
+- **Dual Course Guarantee (Advanced 2 & 3)**: All automation logic, selectors, and solvers must work across both Advanced 2 and Advanced 3 curricula without regression. Never remove existing widget handlers.
 - **Docker & Docker Compose**: Preferred runtime. Packages Chromium with required audio codecs, fonts, and resource caps.
 - **Credentials & LLM Configuration**: Configured via `.env` (top 5 keys: `ED_USER`, `ED_PASS`, `OPENAI_API_KEY`, `OPENAI_BASE_URL`, `OPENAI_MODEL`). Fallback creds file supported at `~/.config/engdis/cred`.
 - **Chrome Flags**: Headless Chromium inside Docker already pre-configured with `--use-fake-ui-for-media-stream --use-fake-device-for-media-stream --autoplay-policy=no-user-gesture-required`.
