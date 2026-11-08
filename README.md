@@ -61,6 +61,47 @@ Compatible with [Agent Skills](https://agentskills.io) (Claude Code, Cursor, Cop
 
 ---
 
+## Architecture
+
+```mermaid
+flowchart TD
+    subgraph Host_or_Container [Execution Environment]
+        Supervisor[cover.py<br/><i>Batch Supervisor</i>]
+        Runner[auto.py<br/><i>Task Navigator</i>]
+        Solver[solver.py<br/><i>Exercise Solver</i>]
+        Driver[driver.py<br/><i>CDP Controller</i>]
+    end
+
+    subgraph Browser [Headless Chromium :9225]
+        LMS[English Discoveries SPA<br/><i>Angular / ed22.engdis.com</i>]
+        Media[HTML5 Audio/Video<br/><i>16x Accelerated</i>]
+        FakeAudio[Fake Media Stream<br/><i>Mic Input Simulation</i>]
+    end
+
+    subgraph LLM_Gateway [OpenAI-Compatible Gateway]
+        LLM[Multimodal LLM / VLM<br/><i>ag/gemini-3.8-flash</i>]
+        ASR[Audio Transcription<br/><i>Base64 Chat Completion</i>]
+    end
+
+    subgraph Diagnostics [Diagnostics & Observability]
+        Fixtures[(JSON Fixtures<br/><i>logs/fixtures/stuck_*.json</i>)]
+        Status[(live_status.json<br/><i>Web Dashboard :8080</i>)]
+    end
+
+    Supervisor -->|spawns worker per lesson| Runner
+    Runner -->|executes step loop| Solver
+    Solver -->|evaluates prompt & choices| LLM
+    Solver -->|transcribes listening tasks| ASR
+    Runner -->|sends CDP commands| Driver
+    Driver -->|WebSocket CDP :9225| LMS
+    Driver -->|16x playback rate| Media
+    Driver -->|virtual mic stream| FakeAudio
+    Runner -->|4 unchanged ticks| Fixtures
+    Runner -->|progress heartbeat| Status
+```
+
+---
+
 ## Features
 
 - **CDP Automation**: Direct DOM instrumentation, interaction simulation, and navigation over Chrome DevTools Protocol.
@@ -72,6 +113,9 @@ Compatible with [Agent Skills](https://agentskills.io) (Claude Code, Cursor, Cop
 ---
 
 ## Project Structure
+
+<details>
+<summary><b>Repository Layout</b> (click to expand)</summary>
 
 ```
 ├── cover.py               # Supervisor and lesson batch runner
@@ -90,6 +134,7 @@ Compatible with [Agent Skills](https://agentskills.io) (Claude Code, Cursor, Cop
 ├── docs/                  # Detailed configuration, architecture, and auth guides
 └── tests/                 # Unit and container test suite
 ```
+</details>
 
 ---
 
