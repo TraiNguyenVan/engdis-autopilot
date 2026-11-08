@@ -4,7 +4,7 @@ import unittest
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 REPO_ROOT = os.path.dirname(HERE)
-SKILL_PATH = os.path.join(REPO_ROOT, "skills", "engdis-autopilot", "SKILL.md")
+SKILL_PATH = os.path.join(REPO_ROOT, ".agents", "skills", "engdis-autopilot", "SKILL.md")
 
 
 class TestSkillValidity(unittest.TestCase):

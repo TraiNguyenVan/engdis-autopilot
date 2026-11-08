@@ -26,14 +26,19 @@ def ask(prompt, audio_b64=None, max_tokens=800):
         headers = {"Content-Type": "application/json"}
         if LLM_KEY:
             headers["Authorization"] = "Bearer " + LLM_KEY
-        try:
-            req = urllib.request.Request(LLM_URL, data=json.dumps(payload).encode(),
-                                        headers=headers)
-            body = urllib.request.urlopen(req, timeout=25).read().decode()
-        except Exception as e:
-            last = e
-            print("! llm %s: %s" % (model, str(e)[:140]), flush=True)
-            time.sleep(1.5)
+        body = None
+        for attempt in range(4):
+            try:
+                req = urllib.request.Request(LLM_URL, data=json.dumps(payload).encode(),
+                                            headers=headers)
+                body = urllib.request.urlopen(req, timeout=45).read().decode()
+                break
+            except Exception as e:
+                last = e
+                print("! llm %s (try %d/4): %s" % (model, attempt + 1, str(e)[:140]), flush=True)
+                if attempt < 3:
+                    time.sleep(2 * (attempt + 1))
+        if body is None:
             continue
         if body.lstrip().startswith("data:"):
             out = []
@@ -520,8 +525,9 @@ def solve_writing(t, src, task_text):
 
 
 def task_text(t):
-    return t.js("""(() => {const p=document.querySelector('ed-la-practicearea');
+    res = t.js("""(() => {const p=document.querySelector('ed-la-practicearea');
       return p? p.innerText.slice(0,1200):'';})()""")
+    return str(res or "")
 
 
 
@@ -557,6 +563,157 @@ def solve_openended(t, src=""):
         ok += 1
     jso(t, "document.body.focus(); if(document.activeElement) document.activeElement.blur(); return 1;")
     return f"open: {ok}"
+
+
+ERRFIX_EXTRACT_JS = """(() => {
+  const frame = document.querySelector('.writingEditFrame');
+  if (!frame) return null;
+  const box = frame.querySelector('.writingEditPracticeWrapper') || frame;
+  const fields = [...box.querySelectorAll('input[type=text], textarea')];
+  if (!fields.length) return null;
+  const clone = box.cloneNode(true);
+  const cloned = [...clone.querySelectorAll('input[type=text], textarea')];
+  cloned.forEach((el, i) => {
+    const s = document.createElement('span');
+    s.textContent = '[[' + (i + 1) + ']]';
+    el.replaceWith(s);
+  });
+  const ctx = (clone.innerText || clone.textContent || '').replace(/\\s+/g, ' ').trim();
+  const errs = [...frame.querySelectorAll('.writingEditResourceSide .et')]
+    .map(e => (e.innerText || '').trim()).filter(Boolean);
+  const instEl = document.querySelector('.learning__taskInstruction');
+  const inst = instEl ? (instEl.innerText || '').trim() : '';
+  let answers = null;
+  let hasItem = false;
+  try {
+    const item = window.$ ? $(fields[0]).data('OEItem') : null;
+    hasItem = !!item;
+    const q = item && item.json && item.json.q && item.json.q[0];
+    if (q && q.al && q.al.length === fields.length) {
+      answers = q.al.map(al => {
+        const list = al.a || [];
+        const correct = list.find(x => x.id !== 1001) || list[1];
+        return correct ? correct.txt : '';
+      });
+    }
+  } catch (e) {}
+  return {
+    ctx: ctx.slice(0, 2500),
+    errs: errs,
+    inst: inst.slice(0, 800),
+    vals: fields.map(f => f.value || ''),
+    answers: answers,
+    hasItem: hasItem,
+    count: fields.length
+  };
+})()"""
+
+ERRFIX_FIELDS = (".writingEditFrame .writingEditPracticeWrapper input[type=text], "
+                 ".writingEditFrame .writingEditPracticeWrapper textarea")
+
+ERRFIX_VERIFY_JS = """(() => {
+  const dd = document.querySelectorAll('ed-la-dropdownlist')[1];
+  const comp = dd ? window.ng?.probe?.(dd)?.componentInstance : null;
+  let prog = null;
+  const node = comp?.dropDownListObj?.SelectedNode;
+  if (node) prog = Number(node.Progress);
+  if (prog === null) {
+    const app = window.ng?.probe?.(document.querySelector('app'))?.componentInstance;
+    const n = app?.navigationService?._stepsList?.SelectedNode;
+    if (n) prog = Number(n.Progress);
+  }
+  let done = null;
+  const box = document.querySelector('.writingEditFrame');
+  if (box) {
+    const c = window.ng?.probe?.(box)?.componentInstance;
+    if (c && 'doneProgress' in c) done = !!c.doneProgress;
+  }
+  return {prog: prog, done: done};
+})()"""
+
+
+def _errorfix_check_js(fn: str) -> str:
+    return """(() => {
+      const el = document.querySelector(%s);
+      const item = window.$ && el ? $(el).data('OEItem') : null;
+      if (item && typeof item.%s === 'function') { item.%s(); return 1; }
+      return 0;
+    })()""" % (json.dumps(ERRFIX_FIELDS), fn, fn)
+
+
+def solve_errorfix(t, src=""):
+    """Two-sided error-correction e-mail: inputs are pre-filled with wrong words.
+
+    The legacy (non-Angular) widget stores each item in jQuery data `OEItem`.
+    Correct answers live in `OEItem.json.q[0].al[i].a` (index 0 is the wrong
+    word, index >= 1 is correct). Updating the DOM alone does nothing: the
+    values must be pushed through the jQuery `change` handler, then
+    `item.checkAnswer()` validates and registers step progress.
+    """
+    data = t.js(ERRFIX_EXTRACT_JS)
+    if not data or not data.get("count"):
+        return "errorfix: nodata"
+
+    vals = data.get("vals") or []
+    ctx = data.get("ctx") or ""
+    errs = data.get("errs") or []
+    inst = data.get("inst") or ""
+    answers = data.get("answers") or []
+
+    # Prefer answers embedded in the legacy item; only ask the LLM when absent.
+    if len(answers) != len(vals):
+        wrong = "\n".join(f"{i + 1}. {v!r}" for i, v in enumerate(vals))
+        prompt = (
+            "TASK: Correct the errors in this e-mail.\n"
+            f"INSTRUCTION:\n{inst or (src or '')[-800:]}\n\n"
+            f"E-MAIL WITH NUMBERED ERRORS:\n{ctx}\n\n"
+            f"CURRENT (WRONG) WORDS:\n{wrong}\n\n"
+            + (("HIGHLIGHTED ERRORS:\n" + "\n".join(f"- {e}" for e in errs) + "\n\n") if errs else "")
+            + 'Replace every [[n]] with the correct word(s). Reply ONLY JSON mapping '
+              'each number to the corrected text: {"1": "...", "2": "..."}'
+        )
+        picks = ask_json(prompt, max_tokens=500) or {}
+        answers = [picks.get(str(i + 1)) or picks.get(i + 1) or "" for i in range(len(vals))]
+
+    filled = 0
+    for i, want in enumerate(answers):
+        want = str(want or "").strip()
+        if not want or want == vals[i]:
+            continue
+        ok = jso(t, """const el=document.querySelectorAll(%s)[%d];
+          if(!el) return 0;
+          const proto = el instanceof HTMLTextAreaElement ? HTMLTextAreaElement.prototype : HTMLInputElement.prototype;
+          const setter = Object.getOwnPropertyDescriptor(proto, 'value').set;
+          setter.call(el, %s);
+          if (window.$) $(el).trigger('change');
+          else el.dispatchEvent(new Event('change', {bubbles:true}));
+          return 1;""" % (json.dumps(ERRFIX_FIELDS), i, json.dumps(want)))
+        if ok:
+            filled += 1
+        time.sleep(0.1)
+
+    # Legacy checker: adds vCheck/xCheck and persists task progress.
+    jso(t, _errorfix_check_js("checkAnswer"))
+
+    state = {}
+    for _ in range(12):
+        time.sleep(0.5)
+        state = t.js(ERRFIX_VERIFY_JS) or {}
+        prog = state.get("prog")
+        if state.get("done") is True or (
+            isinstance(prog, (int, float)) and not isinstance(prog, bool) and prog >= 0.999
+        ):
+            break
+
+    prog = state.get("prog")
+    if not (isinstance(prog, (int, float)) and not isinstance(prog, bool) and prog >= 0.999):
+        # Some legacy variants only persist on unload.
+        jso(t, _errorfix_check_js("onItemUnloaded"))
+        time.sleep(1.0)
+        state = t.js(ERRFIX_VERIFY_JS) or state
+
+    return (f"errorfix: {filled}/{len(vals)} prog={state.get('prog')} "
+            f"done={state.get('done')}")
 
 
 def solve_fitb(t, src=""):
@@ -627,6 +784,8 @@ def do_task(t, src):
     for _ in range(40):
         ready = t.js("""(() => (document.querySelector('.prMCQ__qaSet')
           || document.querySelector('.prOpenEnded__qaItemText')
+          || document.querySelector('.writingEditFrame .writingEditPracticeWrapper input[type=text]')
+          || document.querySelector('.writingEditFrame .writingEditPracticeWrapper textarea')
           || document.querySelector('.DDLOptions__selected')
           || document.querySelector('.lessonMultipleAnswer')
           || document.querySelector('.dnditem')
@@ -642,6 +801,7 @@ def do_task(t, src):
     kind = t.js("""(() => {
       if(window.tinymce && tinymce.activeEditor && tinymce.activeEditor.initialized && document.querySelector('.mce-edit-area, iframe[id$=_ifr]')) return 'writing';
       if(document.querySelector('.prOpenEnded__qaItemText')) return 'open';
+      if(document.querySelector('.writingEditFrame .writingEditPracticeWrapper input[type=text], .writingEditFrame .writingEditPracticeWrapper textarea')) return 'errorfix';
       if(document.querySelector('.DDLOptions__selected')) return 'fitb';
       if(document.querySelectorAll('.prMCQ__qaSet').length) return 'mcq';
       if(document.querySelectorAll('.lessonMultipleAnswer').length) return 'multi';
@@ -671,6 +831,8 @@ def do_task(t, src):
         return solve_fitb(t, src)
     if kind == "open":
         return solve_openended(t, src)
+    if kind == "errorfix":
+        return solve_errorfix(t, src)
     if kind == "select_text":
         return solve_select_text(t, src)
     if kind == "writing":
