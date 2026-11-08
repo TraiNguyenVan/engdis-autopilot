@@ -12,7 +12,7 @@ This repository is optimized for autonomous AI coding agents (Hermes, Claude Cod
 
 ### Example Prompts for AI Agents
 
-Under the [Agent Skills open standard](https://agentskills.io), invoke the bundled skill directly using slash commands (`/engdis-autopilot`) in tools like Claude Code, Cursor, and GitHub Copilot, or mention the file path (`@skills/engdis-autopilot/SKILL.md`):
+Under the [Agent Skills open standard](https://agentskills.io), invoke the bundled skill directly using slash commands (`/engdis-autopilot`), mentions (`@engdis-autopilot`, `$engdis-autopilot`), or file references (`@skills/engdis-autopilot/SKILL.md`):
 
 #### 1. Unattended Background Course Run
 ```text
@@ -21,15 +21,15 @@ Under the [Agent Skills open standard](https://agentskills.io), invoke the bundl
 
 #### 2. Debug & Fix Stalled Tasks from Fixtures
 ```text
-/engdis-autopilot The autopilot stalled on a lesson. Inspect the latest JSON dump in `logs/fixtures/stuck_*.json`. Analyze the recorded DOM HTML and task type, identify why the current solver in `solver.py` or `auto.py` failed to click or answer, add a reproducer test in `tests/`, patch the logic, and verify against the test suite.
+@engdis-autopilot The autopilot stalled on a lesson. Inspect the latest JSON dump in `logs/fixtures/stuck_*.json`. Analyze the recorded DOM HTML and task type, identify why the current solver in `solver.py` or `auto.py` failed to click or answer, add a reproducer test in `tests/`, patch the logic, and verify against the test suite.
 ```
 
 #### 3. Targeted Single-Lesson Remediation
 ```text
-/engdis-autopilot Re-run only the failing test in "Unit 2: Overcoming Difficulties", lesson "A Bit Deaf". Use the test-only flag `--test-only` to avoid re-running already completed explore steps. Confirm the final exit code is 0.
+$engdis-autopilot Re-run only the failing test in "Unit 2: Overcoming Difficulties", lesson "A Bit Deaf". Use the test-only flag `--test-only` to avoid re-running already completed explore steps. Confirm the final exit code is 0.
 ```
 
-*(For IDEs with context file mentions like Cursor or Windsurf, `@skills/engdis-autopilot/SKILL.md` is also supported).*
+*(Supported invocation syntax across agents: `/engdis-autopilot` in Claude Code / Copilot / Cursor, `@engdis-autopilot` or `$engdis-autopilot` in agent harnesses supporting skill mentions, or direct path `@skills/engdis-autopilot/SKILL.md`).*
 
 ### Autonomous Operating Protocol
 When an agent is tasked with running or fixing courses, follow this loop:
