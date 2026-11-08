@@ -6,6 +6,7 @@ import json, os, sys, time
 
 import edlib, login, poll, solver
 import config
+import cover
 from diag_logger import DiagnosticLogger
 
 diag = DiagnosticLogger(log_dir="logs_diag")
@@ -341,6 +342,12 @@ def main(max_iter=120):
             if adv > 4:
                 print(f"STEP-SWITCH-STUCK ({s['lesson']}) — returning to home to clear lock")
                 t.goto("https://ed22.engdis.com/ptithcm#/home", wait=4)
+                target_course = os.environ.get("ED_COURSE") or config.ED_COURSE
+                if target_course:
+                    try:
+                        cover.ensure_course(t, target_course)
+                    except Exception:
+                        pass
                 adv_tries.clear()
             prev = None
             continue
@@ -352,6 +359,16 @@ def main(max_iter=120):
             poll.wait_until(
                 lambda: q(t, "const e=document.querySelector('.learning__taskNavPCCurrentTask'); return e?e.innerText.trim():null;"),
                 lambda v: v is not None, timeout=12.0, interval=0.25)
+            prev = None
+            continue
+
+        # test score / review screen (test already completed)
+        if "your test score is" in s["body"].lower() or ("review your answers" in s["body"].lower() and "next arrow" in s["body"].lower()):
+            print(f"-- test completed, advancing to finish lesson ({s.get('lesson')})")
+            nxt = solver.set_next_step(t)
+            if nxt == 'last step' or not advance(t):
+                require_lesson_complete(t)
+            time.sleep(1.0)
             prev = None
             continue
 
@@ -439,7 +456,7 @@ def main(max_iter=120):
                     if speak_tries[sk] >= 3:
                         print("SPEAK-BLOCKED", sk, flush=True)
                         sys.exit(3)
-                elif kind in ("mcq", "multi", "drag", "write"):
+                elif kind in ("mcq", "multi", "drag", "write", "select_text"):
                     out = solver.do_task(t, src)
                     # Click Check answer if present
                     if click_text(t, "Check answer") or click_text(t, "Check Answer"):

@@ -401,6 +401,8 @@ def cover_unit(t, unit_i, passes=2, dry=False, skips=None, target_course=None,
                 report["lessons"][l["name"]] = {"nav": str(nav)}
                 continue
             extra_env = {}
+            if target_course:
+                extra_env["ED_COURSE"] = target_course
             if target_step:
                 extra_env["ED_TARGET_STEP"] = target_step
             elif test_only:
