@@ -45,8 +45,7 @@ Select target course via environment variable, Docker Compose, or CLI:
 
 ```bash
 # Environment variable / Docker Compose
-ED_COURSE="<COURSE>" ED_UNIT=0 docker compose run --rm engdis
-ED_COURSE="a3" ED_UNIT=0 docker compose run --rm engdis
+ED_COURSE="<COURSE>" ED_UNIT=<UNIT_IDX> docker compose run --rm engdis
 
 # Development container (engdis_inspect)
 docker exec engdis_inspect python3 cover.py 0 1 --course="<COURSE>"
