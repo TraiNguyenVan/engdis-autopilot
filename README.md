@@ -89,7 +89,40 @@ python3 cover.py 1 1 --course="Advanced 3" --test-only
 
 ## Agent Operations
 
-If you are an AI coding agent operating this repository, inspect `skills/engdis-autopilot/SKILL.md` for exact operational procedures, CLI flags, fixture debugging workflows, and courseware failure recovery.
+This repository is optimized for autonomous AI coding agents (Hermes, Claude Code, Codex, Antigravity, OpenClaw).
+
+### Loading the In-Repo Skill
+If your agent environment supports skills, load the bundled operational skill directly:
+- **Skill File**: `skills/engdis-autopilot/SKILL.md`
+
+### Autonomous Operating Protocol
+When an agent is tasked with running or fixing courses, follow this loop:
+
+1. **Launch Non-Blocking Background Batch**:
+   Run supervisor in background to avoid consuming chat context tokens:
+   ```bash
+   python3 -u cover.py 5-9 2 --course="Advanced 3"
+   ```
+2. **Inspect Fixtures on Stall**:
+   When exercises cannot be solved or reach 4 unchanged ticks, the harness auto-dumps task state to:
+   ```bash
+   ls -lt logs/fixtures/stuck_*.json
+   ```
+   Inspect `body` and `html` in the JSON fixture to identify missing DOM selectors or task types without needing a live browser session.
+3. **Targeted Remediation & Re-run**:
+   Isolate and verify the fix on the exact failing lesson and step:
+   ```bash
+   # Test-only pass
+   python3 cover.py 1 1 --course="Advanced 3" --test-only
+
+   # Step-specific pass
+   python3 cover.py 1 1 --course="Advanced 3" --step="Practice"
+   ```
+4. **Offline Test Suite Gate**:
+   Always run the unit test suite before pushing patches:
+   ```bash
+   python3 -m unittest discover -s tests
+   ```
 
 ---
 
