@@ -1,6 +1,7 @@
 # AGENTS.md
 
 Instructions, conventions, and operational patterns for AI coding agents (Claude Code, Cursor, Codex, Antigravity, OpenClaw, Hermes) working in this repository.
+For detailed contribution protocols, fixture reproduction steps, and PR gates, see [CONTRIBUTING.md](CONTRIBUTING.md).
 
 ---
 

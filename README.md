@@ -33,6 +33,7 @@ docker exec engdis_inspect python3 cover.py <UNIT_IDX> 1 --course="<COURSE>" --t
 ## Delegating to AI Agents
 
 Compatible with [Agent Skills](https://agentskills.io) (Claude Code, Cursor, Copilot, Hermes, Codex, OpenClaw).
+See [CONTRIBUTING.md](CONTRIBUTING.md) for contribution guidelines, agent workflows, and offline reproducer steps.
 
 <details open>
 <summary><b>Example Prompts</b> (click to collapse)</summary>
