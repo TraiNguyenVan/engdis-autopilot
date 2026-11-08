@@ -137,6 +137,27 @@ If you are a coding agent executing the harness via terminal:
   3. Patch `solver.py` or `auto.py`.
   4. Run `python3 -m unittest discover -s tests` and re-run with `--lesson="..."`.
 
+### 11. Grill-Me Ambiguity Gate (Pre-Execution Interview)
+Never guess or extrapolate vague user instructions. If a user request lacks 100% clarity regarding targets, modes, or boundaries (e.g. "run the course", "fix the test", "do it again"):
+**Do not execute commands immediately.** Stop and grill the user with a single structured round of numbered questions:
+- Each question must include your recommended option first.
+- Word recommendations so a simple "yes" or choice selection confirms it.
+- Never ask what you can verify from tools/files (check current course and progress via LMS/reports first).
+
+**Clarification Checklist**:
+1. **Target Course & Unit Scope**: Exact course name (e.g. `"Advanced 3"`) and unit range (e.g. `0-9` vs `5-9`).
+2. **Execution Mode**: Agent Yield mode (stops on stalls to let agent fix) vs Unattended mode (`--unattended`, logs & continues).
+3. **Step Scope**: Full lesson vs `--test-only` vs specific `--step="Practice"`.
+4. **Retry Budget**: Number of passes (default 2).
+
+**Template**:
+```text
+Before launching, confirm your exact run configuration:
+1. Target Course & Units: Run "Advanced 3" Units 5-9? (Recommended) [Yes / Other range]
+2. Execution Mode: Agent Yield mode (rc=6 halts to fix stalls)? (Recommended) [Agent Yield / Unattended]
+3. Step Scope: Full lessons (Explore + Practice + Test)? (Recommended) [Full / Test-Only]
+```
+
 ## Verification
 
 Run the offline mock test suite:

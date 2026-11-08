@@ -67,6 +67,13 @@ When retrying an incomplete lesson, `auto.py` automatically checks step progress
 
 - In **Unattended mode** (`--unattended` or `ED_UNATTENDED=1`), stalls and incomplete lessons are logged to report JSON and the batch exits `rc=0` without waking the agent.
 
+### Ambiguity Gate (Grill-Me Protocol)
+If user instruction lacks complete precision (e.g., "run it", "test the rest", "fix issues"), **do not execute immediately**.
+Interview user with 1 numbered round presenting recommended choices first:
+1. Target Course & Units (e.g., "Advanced 3", Units 5-9)?
+2. Mode: Agent Yield (`rc=6` on stall) vs Unattended (`--unattended`)?
+3. Scope: Full lesson vs `--test-only` vs specific `--lesson`?
+
 ---
 
 ## 4. Operational Commands Cheat-Sheet
