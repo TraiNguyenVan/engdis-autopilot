@@ -30,21 +30,22 @@ Operational procedures for AI coding agents running, diagnosing, and repairing t
 
 ## Quick Reference
 
+> **CRITICAL EXECUTION RULE**: Never run `python3 cover.py` directly on the host machine. Headless Chromium with fake audio stream flags runs exclusively inside Docker. Always execute via Docker:
+> - Production / Batch: `ED_COURSE="<COURSE>" ED_UNITS="<UNITS>" ED_PASSES=2 ED_UNATTENDED=1 docker compose run --rm engdis`
+> - Development container: `docker exec engdis_inspect python3 -u cover.py <UNITS> 2 --course="<COURSE>"`
+>
+> Never guess which course or units to automate. Inspect active LMS state first or ask explicitly.
+
 ```bash
-# Multi-unit batch run (e.g. Units 5 to 9, 2 passes)
-python3 cover.py 5-9 2 --course="Advanced 3"
+# Multi-unit batch run via Docker
+ED_COURSE="<COURSE>" ED_UNITS="<UNITS>" ED_PASSES=2 docker compose run --rm engdis
 
-# Single lesson targeting
-python3 cover.py 1 1 --course="Advanced 3" --lesson="IFL Broadcast"
-
-# Test-only pass (skips Explore & Practice if already done)
-python3 cover.py 1 1 --course="Advanced 3" --test-only
-
-# Specific step debugging
-python3 cover.py 1 1 --course="Advanced 3" --step="Practice"
-
-# Dry-run inspection (inspects current LMS state without solving)
-python3 cover.py 0-9 1 --course="Advanced 3" --dry
+# Long-running inspect container (engdis_inspect)
+docker exec engdis_inspect python3 -u cover.py <UNITS> 2 --course="<COURSE>"
+docker exec engdis_inspect python3 cover.py <UNIT_IDX> 1 --course="<COURSE>" --lesson="<LESSON_NAME>"
+docker exec engdis_inspect python3 cover.py <UNIT_IDX> 1 --course="<COURSE>" --test-only
+docker exec engdis_inspect python3 cover.py <UNIT_IDX> 1 --course="<COURSE>" --step="Practice"
+docker exec engdis_inspect python3 cover.py 0-9 1 --course="<COURSE>" --dry
 ```
 
 ## Operational Procedures
@@ -145,7 +146,7 @@ Never guess or extrapolate vague user instructions. If a user request lacks 100%
 - Never ask what you can verify from tools/files (check current course and progress via LMS/reports first).
 
 **Clarification Checklist**:
-1. **Target Course & Unit Scope**: Exact course name (e.g. `"Advanced 3"`) and unit range (e.g. `0-9` vs `5-9`).
+1. **Target Course & Unit Scope**: Exact course name and unit range.
 2. **Execution Mode**: Agent Yield mode (stops on stalls to let agent fix) vs Unattended mode (`--unattended`, logs & continues).
 3. **Step Scope**: Full lesson vs `--test-only` vs specific `--step="Practice"`.
 4. **Retry Budget**: Number of passes (default 2).
@@ -153,9 +154,9 @@ Never guess or extrapolate vague user instructions. If a user request lacks 100%
 **Template**:
 ```text
 Before launching, confirm your exact run configuration:
-1. Target Course & Units: Run "Advanced 3" Units 5-9? (Recommended) [Yes / Other range]
-2. Execution Mode: Agent Yield mode (rc=6 halts to fix stalls)? (Recommended) [Agent Yield / Unattended]
-3. Step Scope: Full lessons (Explore + Practice + Test)? (Recommended) [Full / Test-Only]
+1. Target Course & Units to cover?
+2. Execution Mode: Agent Yield mode (rc=6 halts to fix stalls) or Unattended?
+3. Step Scope: Full lessons (Explore + Practice + Test) or Test-Only?
 ```
 
 ## Verification

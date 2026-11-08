@@ -12,15 +12,19 @@ echo "==================================================" >> "$LOG_FILE"
 echo "Grind Pipeline Started: $(date)" >> "$LOG_FILE"
 echo "==================================================" >> "$LOG_FILE"
 
+COURSE="${1:-${ED_COURSE:-}}"
+UNITS="${2:-${ED_UNITS:-all}}"
+
 # Loop continuously until STOP file is present
 while [ ! -f "STOP" ]; do
-  echo "[$(date)] Running Advanced 2 (Units 8-9)..." >> "$LOG_FILE"
-  ED_COURSE="Advanced 2" ED_UNITS="8-9" docker compose run --rm --name engdis_runner engdis >> "$LOG_FILE" 2>&1 || true
+  echo "[$(date)] Running batch (Course: ${COURSE:-<default>}, Units: ${UNITS})..." >> "$LOG_FILE"
+  if [ -n "$COURSE" ]; then
+    ED_COURSE="$COURSE" ED_UNITS="$UNITS" docker compose run --rm --name engdis_runner engdis >> "$LOG_FILE" 2>&1 || true
+  else
+    ED_UNITS="$UNITS" docker compose run --rm --name engdis_runner engdis >> "$LOG_FILE" 2>&1 || true
+  fi
 
   if [ -f "STOP" ]; then break; fi
-
-  echo "[$(date)] Running Advanced 3 (Units 0-9)..." >> "$LOG_FILE"
-  ED_COURSE="Advanced 3" ED_UNITS="all" docker compose run --rm --name engdis_runner engdis >> "$LOG_FILE" 2>&1 || true
 
   echo "[$(date)] Pass cycle completed. Resting 15s before next check..." >> "$LOG_FILE"
   sleep 15

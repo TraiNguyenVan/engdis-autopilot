@@ -22,14 +22,14 @@ docker compose build
 
 ### 2. Run
 ```bash
-# Docker Compose (0-based unit index)
-ED_COURSE="Advanced 3" ED_UNIT=0 ED_DRY_RUN=0 docker compose run --rm engdis
-ED_COURSE="Advanced 3" ED_UNIT=5-9 ED_PASSES=2 ED_DRY_RUN=0 docker compose run --rm engdis
+# Docker Compose (preferred)
+ED_COURSE="<COURSE>" ED_UNITS="<UNITS>" ED_DRY_RUN=0 docker compose run --rm engdis
+ED_COURSE="<COURSE>" ED_UNITS="<UNITS>" ED_PASSES=2 ED_DRY_RUN=0 docker compose run --rm engdis
 
-# Host CLI (requires local Chromium + FFmpeg)
-python3 cover.py 5-9 2 --course="Advanced 3"               # Autonomous yield mode (rc=6 on stalls)
-python3 cover.py 5-9 2 --course="Advanced 3" --unattended  # Unattended mode (skips stalls, keeps running)
-python3 cover.py 1 1 --course="Advanced 3" --test-only
+# Long-running inspect container (engdis_inspect)
+docker exec engdis_inspect python3 -u cover.py <UNITS> 2 --course="<COURSE>"               # Autonomous yield mode (rc=6 on stalls)
+docker exec engdis_inspect python3 -u cover.py <UNITS> 2 --course="<COURSE>" --unattended  # Unattended mode (skips stalls, keeps running)
+docker exec engdis_inspect python3 cover.py <UNIT_IDX> 1 --course="<COURSE>" --test-only
 ```
 
 ---
@@ -42,11 +42,11 @@ Compatible with [Agent Skills](https://agentskills.io) (Claude Code, Cursor, Cop
 <summary><b>Example Prompts</b> (click to collapse)</summary>
 
 - **Unattended Background Run**:
-  > `/engdis-autopilot Run background supervisor for "Advanced 3", Units 5-9, 2 passes. Run as background task, minimize chat interactions, and report final completion.`
+  > `/engdis-autopilot Run background supervisor for course "<COURSE>", units "<UNITS>", 2 passes. Run inside Docker, minimize chat interactions, and report final completion.`
 - **Fix Stalled Tasks from Fixture**:
   > `/engdis-autopilot Autopilot stalled on a lesson. Inspect latest JSON in logs/fixtures/stuck_*.json. Check DOM HTML and task type, patch solver.py or auto.py, and verify with tests.`
 - **Targeted Single-Lesson Test**:
-  > `/engdis-autopilot Re-run failing test in "Unit 2: Overcoming Difficulties", lesson "A Bit Deaf" with --test-only. Confirm exit code 0.`
+  > `/engdis-autopilot Re-run failing test in unit <UNIT_IDX>, lesson "<LESSON_NAME>" with --test-only inside Docker. Confirm exit code 0.`
 
 *Syntax tips: `/engdis-autopilot` is default for Claude Code, Copilot, and Cursor Agent Mode. If your harness prefers mentions or file tags, `@engdis-autopilot`, `$engdis-autopilot`, or `@skills/engdis-autopilot/SKILL.md` also work.*
 </details>

@@ -43,13 +43,13 @@ Select target course via environment variable, Docker Compose, or CLI:
 
 ```bash
 # Environment variable / Docker Compose
-ED_COURSE="Advanced 3" ED_UNIT=0 docker compose run --rm engdis
+ED_COURSE="<COURSE>" ED_UNIT=0 docker compose run --rm engdis
 ED_COURSE="a3" ED_UNIT=0 docker compose run --rm engdis
 
-# CLI flag (cover.py or cover_all.sh)
-python3 cover.py 0 1 --course="Advanced 3"
-python3 cover.py 0 1 --course=a3
-python3 cover.py 0 1 --course=45742
+# Development container (engdis_inspect)
+docker exec engdis_inspect python3 cover.py 0 1 --course="<COURSE>"
+docker exec engdis_inspect python3 cover.py 0 1 --course=a3
+docker exec engdis_inspect python3 cover.py 0 1 --course=45742
 ```
 
 Supported identifiers:
