@@ -831,13 +831,45 @@ def main(max_tasks=200):
 DUMP_TASK_JS = """(() => {
   const practiceArea = document.querySelector('ed-la-practicearea') || document.querySelector('#pmContainer') || document.body;
   let practiceData = null;
+  let compState = null;
   try {
     const probe = window.ng?.probe?.(document.querySelector('ed-la-practicearea'));
-    practiceData = probe?.componentInstance?.practiceData || probe?.componentInstance?.itemInfo || null;
+    const comp = probe?.componentInstance;
+    if (comp) {
+      practiceData = comp.practiceData || comp.itemInfo || null;
+      compState = {};
+      const keys = ['doneProgress', 'isSubmitted', 'currentState', 'taskType', 'questionType', 'mode', 'status', 'step', 'counter'];
+      for (const k of keys) {
+        if (k in comp) {
+          try { compState[k] = comp[k]; } catch(e){}
+        }
+      }
+    }
   } catch(e) {}
+
+  const interactives = [];
+  try {
+    const sel = 'button, a, [role="button"], .button, input[type="button"], input[type="submit"], .openSpeech__btn, .panelButton, .arrow-right, .nextStepArrow';
+    document.querySelectorAll(sel).forEach(el => {
+      const rect = el.getBoundingClientRect();
+      const visible = (el.offsetParent !== null || rect.width > 0) && window.getComputedStyle(el).display !== 'none';
+      if (visible) {
+        interactives.push({
+          tag: el.tagName.toLowerCase(),
+          cls: (el.className || '').toString().trim(),
+          id: el.id || '',
+          text: (el.innerText || el.textContent || '').trim().slice(0, 80),
+          rect: { x: Math.round(rect.x), y: Math.round(rect.y), w: Math.round(rect.width), h: Math.round(rect.height) }
+        });
+      }
+    });
+  } catch(e) {}
+
   return {
     html: practiceArea ? practiceArea.innerHTML : '',
     practiceData: practiceData,
+    compState: compState,
+    interactives: interactives,
     body: (document.body?.innerText || '').trim(),
     url: window.location.href
   };
@@ -845,16 +877,28 @@ DUMP_TASK_JS = """(() => {
 
 
 def dump_task(t, out_path: str, meta: dict | None = None) -> str:
-    """Dump current task DOM and angular metadata to a JSON fixture for offline debugging."""
+    """Dump current task DOM, interactive elements, angular metadata, and screenshot for offline debugging."""
     try:
         os.makedirs(os.path.dirname(os.path.abspath(out_path)), exist_ok=True)
         raw = t.js(DUMP_TASK_JS) or {}
+
+        # Capture screenshot if tab driver supports CDP
+        screenshot_b64 = None
+        try:
+            res = t.cdp("Page.captureScreenshot", format="png", quality=80)
+            screenshot_b64 = res.get("data") if isinstance(res, dict) else None
+        except Exception:
+            pass
+
         payload = {
             "meta": meta or {},
             "html": raw.get("html", ""),
             "practiceData": raw.get("practiceData"),
+            "compState": raw.get("compState"),
+            "interactives": raw.get("interactives") or [],
             "body": raw.get("body", ""),
             "url": raw.get("url", ""),
+            "screenshot": screenshot_b64,
             "timestamp": time.time()
         }
         with open(out_path, "w", encoding="utf-8") as f:

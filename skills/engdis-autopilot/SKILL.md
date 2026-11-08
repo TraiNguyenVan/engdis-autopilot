@@ -53,13 +53,22 @@ python3 cover.py 0-9 1 --course="Advanced 3" --dry
 When `auto.py` detects 4 consecutive unchanged ticks, it dumps the full task state to:
 `logs/fixtures/stuck_<lesson>_<task>_<timestamp>.json`
 
+The fixture includes:
+- `body`: Visible text of the task.
+- `html`: Raw HTML DOM of the exercise container.
+- `compState`: Angular component properties (`doneProgress`, `isSubmitted`, `currentState`, `taskType`).
+- `interactives`: List of all visible clickable elements (`tag`, `cls`, `id`, `text`, `rect`).
+- `screenshot`: Base64 PNG viewport capture.
+
 To inspect a stalled task:
 ```python
-import json
-data = json.load(open("logs/fixtures/stuck_Lesson_1__Call_In_5_20261107_182023.json"))
-print(data.keys())       # ['meta', 'html', 'practiceData', 'body', 'url']
-print(data["body"])      # Visible text of the task
-print(data["html"])      # Raw HTML DOM of the exercise container
+import json, glob
+path = sorted(glob.glob("logs/fixtures/stuck_*.json"))[-1]
+data = json.load(open(path))
+print("URL:", data.get("url"))
+print("BODY:", data.get("body", "")[:300])
+print("COMP STATE:", data.get("compState"))
+print("CLICKABLES:", [(el["tag"], el["cls"], el["text"][:30]) for el in data.get("interactives", [])])
 ```
 Use this to identify missing exercise selectors in `solver.py` without needing a live browser session.
 
