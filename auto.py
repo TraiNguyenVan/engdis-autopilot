@@ -317,6 +317,32 @@ def main(max_iter=120):
                     prev = None
                     continue
 
+        # If no explicit target step requested, automatically jump to the first incomplete step
+        if not target_step_name and not target_step_jumped:
+            first_incomplete_js = """(() => {
+              const dd1 = document.querySelectorAll('ed-la-dropdownlist')[1];
+              const comp = dd1 ? window.ng?.probe?.(dd1)?.componentInstance : null;
+              const children = comp?.dropDownListObj?.Children || [];
+              if (!children.length) return null;
+              const idx = children.findIndex(c => {
+                const p = Number(c.Progress);
+                return isNaN(p) || p < 0.999;
+              });
+              if (idx > 0) {
+                return {index: idx, name: children[idx].Name};
+              }
+              return null;
+            })()"""
+            inc = t.js(first_incomplete_js)
+            if isinstance(inc, dict) and inc.get("index"):
+                target_step_jumped = True
+                print(f"-- fast-forward to first incomplete step: {inc.get('name')} (index {inc['index']})")
+                solver.set_step(t, inc["index"])
+                time.sleep(1.5)
+                prev = None
+                continue
+            target_step_jumped = True
+
         solver.neutralize(t)
 
         # Practice already recorded server-side but the app still renders the last

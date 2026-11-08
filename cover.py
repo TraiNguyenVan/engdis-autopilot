@@ -511,6 +511,23 @@ def main():
         print("\n================ MULTI-UNIT SUMMARY ================")
         for r in all_reports:
             print(f"Unit {r['unit_index']} ({r['unit']}): {pct(r['unit_progress'])}")
+
+    if not unattended:
+        incomplete_lessons = []
+        for r in all_reports:
+            u_name = r.get("unit") or f"Unit {r.get('unit_index')}"
+            for lname, ldata in r.get("lessons", {}).items():
+                if ldata.get("blocked"):
+                    continue
+                final_p = _num(ldata.get("final"))
+                if final_p < 0.999:
+                    incomplete_lessons.append(f"{u_name} -> {lname} ({pct(final_p)})")
+        if incomplete_lessons:
+            print(f"\n[AGENT-ACTION-REQUIRED]\nBatch finished with incomplete lesson(s):\n" +
+                  "\n".join(f"- {item}" for item in incomplete_lessons) +
+                  "\nRe-run with targeted lesson command to finish.", file=sys.stderr, flush=True)
+            return 6
+
     return 0
 
 
