@@ -95,6 +95,24 @@ This repository is optimized for autonomous AI coding agents (Hermes, Claude Cod
 If your agent environment supports skills, load the bundled operational skill directly:
 - **Skill File**: `skills/engdis-autopilot/SKILL.md`
 
+### Example Prompts for AI Agents
+Copy-paste these task prompts when delegating to an AI coding agent:
+
+#### 1. Unattended Background Course Run
+```text
+Run the background supervisor for course "Advanced 3", covering Units 5 through 9 with 2 passes. Launch the process as a background task, minimize chat interactions to conserve LLM tokens, and report back only the final completion percentage and any stalled units.
+```
+
+#### 2. Debug & Fix Stalled Tasks from Fixtures
+```text
+The autopilot stalled on a lesson. Inspect the latest JSON dump in `logs/fixtures/stuck_*.json`. Analyze the recorded DOM HTML and task type, identify why the current solver in `solver.py` or `auto.py` failed to click or answer, add a reproducer test in `tests/`, patch the logic, and verify against the test suite.
+```
+
+#### 3. Targeted Single-Lesson Remediation
+```text
+Re-run only the failing test in "Unit 2: Overcoming Difficulties", lesson "A Bit Deaf". Use the test-only flag `--test-only` to avoid re-running already completed explore steps. Confirm the final exit code is 0.
+```
+
 ### Autonomous Operating Protocol
 When an agent is tasked with running or fixing courses, follow this loop:
 
