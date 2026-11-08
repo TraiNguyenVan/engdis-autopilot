@@ -45,7 +45,7 @@ See [CONTRIBUTING.md](CONTRIBUTING.md) for contribution guidelines, agent workfl
 - **Targeted Single-Lesson Test**:
   > `/engdis-autopilot Re-run failing test in unit <UNIT_IDX>, lesson "<LESSON_NAME>" with --test-only inside Docker. Confirm exit code 0.`
 
-*Syntax tips: `/engdis-autopilot` is default for Claude Code, Copilot, and Cursor Agent Mode. If your harness prefers mentions or file tags, `@engdis-autopilot`, `$engdis-autopilot`, or `@skills/engdis-autopilot/SKILL.md` also work.*
+*Syntax tips: `/engdis-autopilot` is default for Claude Code, Copilot, and Cursor Agent Mode. If your harness prefers mentions or file tags, `@engdis-autopilot`, `$engdis-autopilot`, or `@.agents/skills/engdis-autopilot/SKILL.md` also work.*
 </details>
 
 <details>
