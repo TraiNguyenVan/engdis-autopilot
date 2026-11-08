@@ -84,6 +84,7 @@ Compatible with [Agent Skills](https://agentskills.io) (Claude Code, Cursor, Cop
 ├── bootstrap_browser.py   # Headless Chromium launcher with CDP health polling
 ├── compose.yaml           # Container definition with resource limits
 ├── Dockerfile             # Debian Bookworm container image with Chromium & FFmpeg
+├── AGENTS.md              # AI coding agent operational patterns, failure modes & cheat-sheet
 ├── skills/
 │   └── engdis-autopilot/  # In-repo operational skill (SKILL.md)
 ├── docs/                  # Detailed configuration, architecture, and auth guides

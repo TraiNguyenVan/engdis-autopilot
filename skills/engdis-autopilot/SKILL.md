@@ -106,6 +106,9 @@ Widgets using `.sequenceZone` / `.prSeq__zone--txt` start with items pre-filled 
 ### 8. Single-Owner Browser Rule
 Never open ad-hoc WebSocket connections to CDP port 9225 while `cover.py` or `auto.py` is running in the background. Concurrent connections lock the DevTools loop and cause command timeouts. Read status non-invasively via `status.py`, `live_status.json`, or log tails.
 
+### 9. Test Score Screen Auto-Advance
+When assessment displays `"Your test score is: 100%"` or `"Review your answers"`, do not retry questions. Click the next arrow button (`.arrow-right`, `.nextStepArrow`) or invoke `solver.set_next_step()` to complete lesson handoff.
+
 ## Verification
 
 Run the offline mock test suite:
