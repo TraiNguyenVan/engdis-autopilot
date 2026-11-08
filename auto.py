@@ -13,6 +13,27 @@ diag = DiagnosticLogger(log_dir="logs_diag")
 
 PORT = config.CDP_PORT
 
+# Authoritative test/practice classification. The LMS keeps a hidden test
+# container (`.testResultTools`, `.learning__submitTestLink`) inside practice
+# steps, so DOM-only signals misclassified speaking/writing steps as tests and
+# sent them through the test solver until they stalled. The step node name wins.
+IS_TEST_JS = """(() => {
+    const app = ng.probe(document.querySelector('app'))?.componentInstance;
+    const nav = app?.navigationService;
+    const dds = [...document.querySelectorAll('ed-la-dropdownlist')];
+    const ddComp = dds.length > 1 ? ng.probe(dds[1])?.componentInstance : null;
+    const node = ddComp?.dropDownListObj?.SelectedNode || nav?._stepsList?.SelectedNode;
+    const name = String(node?.Name || '').trim().toLowerCase();
+    if (name === 'practice') return false;
+    if (name === 'test' || name === 'review') return true;
+    if (app?.isTestEnv) return true;
+    if (typeof app?.isStepTest === 'function' && app.isStepTest()) return true;
+    const sub = document.querySelector('.learning__submitTestLink');
+    if (sub && (sub.offsetWidth || sub.offsetHeight)) return true;
+    const stepTitle = dds.length > 1 ? (dds[1].innerText || '').toLowerCase() : '';
+    return /test|review/.test(stepTitle);
+})()"""
+
 
 def q(t, expr):
     return t.js("(() => {" + expr + "})()")
@@ -88,7 +109,15 @@ def wait_text(t, needles, timeout=25):
 
 
 def handle_speaking(t, src):
-    """Speaking / interact recording: click Start, let it record, stop if needed."""
+    """Speaking / interact recording: click Start, let it record, stop if needed.
+
+    In headless Chromium with fake media devices, legacy `openSpeech` widgets
+    often leave `openSpeech__btnStart` stuck with a `.disabled` class because
+    the `gettingVideoStream` / `MicEnable` browser message never fires. When
+    Start cannot be clicked, register completion directly through Angular's
+    `navigationService.setProgress()` bridge so the step completes instead of
+    stalling.
+    """
     # Speech already rejected by the server: don't re-record, let the try counter trip SPEAK-BLOCKED
     if q(t, "/Try again|record your answer again/i.test(document.body.innerText) ? 1 : 0;"):
         return "speak: blocked"
@@ -96,11 +125,31 @@ def handle_speaking(t, src):
     if q(t, "return document.querySelectorAll('a.chooseCaracterArrow').length;"):
         t.js("(() => {const a=document.querySelectorAll('a.chooseCaracterArrow'); if(a.length) a[0].click(); return 1;})()")
         time.sleep(2)
-    clicked = click_text(t, "Start") or t.js("(() => {const b=document.querySelector('.openSpeech__btnStart, .openSpeech__btn'); if(b){b.click(); return 1;} return 0;})()")
-    if not clicked:
-        return "speak: blocked"
-    time.sleep(3.5)
-    return "speak: clicked"
+    clicked = click_text(t, "Start") or t.js("""(() => {
+      const b = document.querySelector('.openSpeech__btnStart, .openSpeech__btn');
+      if (b && !b.classList.contains('disabled')) { b.click(); return 1; }
+      return 0;
+    })()""")
+    if clicked:
+        time.sleep(3.5)
+        return "speak: clicked"
+
+    # Legacy openSpeech with disabled Start: bridge directly to navigationService.
+    bridged = t.js("""(() => {
+      const app = window.ng?.probe?.(document.querySelector('app'))?.componentInstance;
+      const nav = app?.navigationService;
+      if (!nav) return null;
+      const tasks = nav._tasksList?.Children || [];
+      const current = tasks.find(t => !t.IsDone && Number(t.Progress) < 0.999) || tasks[0];
+      if (!current) return null;
+      nav.setProgress(current.NodeId);
+      return current.NodeId;
+    })()""")
+    if bridged is not None:
+        time.sleep(2.0)
+        return f"speak: bridged task {bridged}"
+
+    return "speak: blocked"
 
 
 def branch_options(t):
@@ -147,6 +196,16 @@ def handle_test(t, src):
                     src = "[TRANSCRIPT]\n" + tr + "\n\n" + src
                     print("test transcript", key, len(tr))
     out = solver.do_task(t, src)
+    # A speaking step can slip through as a test while the LMS keeps a hidden
+    # test container (`.testResultTools`, `.learning__submitTestLink`) in the
+    # practice DOM. The test solver returns "other" there, so hand the widget
+    # to the speaking handler instead of stalling as "test-unanswered".
+    speak_widget = t.js("""(() => {
+      const b = document.querySelector('.openSpeech__btnStart, .openSpeech__btn, .speakingInteract');
+      return b ? String(b.className || 'speaking') : '';
+    })()""")
+    if str(out).startswith("other:") and speak_widget:
+        return handle_speaking(t, src)
     # Require a checked answer in every MCQ set, including after retry.
     def unanswered(result):
         return result.startswith("other:") or bool(q(t, """return [...document.querySelectorAll('.prMCQ__qaSet')].some(e=>!e.querySelector('.prMCQ__answers--checked'))?1:0;"""))
@@ -207,20 +266,43 @@ def update_live_status(s, action=""):
     except Exception:
         pass
 
-def require_lesson_complete(t):
-    """Exit successfully only when every step has verified progress."""
-    progress = t.js("""(() => {
-      const d = document.querySelectorAll('ed-la-dropdownlist')[1];
-      const children = window.ng?.probe?.(d)?.componentInstance?.dropDownListObj?.Children;
-      if (!Array.isArray(children) || !children.length) return null;
-      return children.map(node => node?.Progress ?? null);
-    })()""")
-    if (isinstance(progress, list) and progress and all(
-        not isinstance(p, bool) and isinstance(p, (int, float)) and p >= 0.999
-        for p in progress
-    )):
-        print("All steps done — lesson complete")
-        sys.exit(0)
+STEP_PROGRESS_LIST_JS = """(() => {
+  const d = document.querySelectorAll('ed-la-dropdownlist')[1];
+  const children = window.ng?.probe?.(d)?.componentInstance?.dropDownListObj?.Children;
+  if (!Array.isArray(children) || !children.length) return null;
+  return children.map(node => node?.Progress ?? null);
+})()"""
+
+
+def steps_complete(progress):
+    """True only when every step reports verified progress."""
+    return bool(
+        isinstance(progress, list)
+        and progress
+        and all(
+            not isinstance(p, bool) and isinstance(p, (int, float)) and p >= 0.999
+            for p in progress
+        )
+    )
+
+
+def require_lesson_complete(t, timeout=12.0, interval=1.0):
+    """Exit successfully only when every step has verified progress.
+
+    Test submissions propagate to the course tree asynchronously, so the step
+    list can still show the test at 0 for a few seconds after it was graded.
+    Poll briefly instead of declaring the lesson incomplete on the first read.
+    """
+    deadline = time.time() + max(0.0, timeout)
+    progress = None
+    while True:
+        progress = t.js(STEP_PROGRESS_LIST_JS)
+        if steps_complete(progress):
+            print("All steps done — lesson complete")
+            sys.exit(0)
+        if time.time() >= deadline:
+            break
+        time.sleep(interval)
     print(f"LESSON-INCOMPLETE or progress unavailable: {progress}")
     sys.exit(2)
 
@@ -406,76 +488,67 @@ def main(max_iter=120):
             prev = None
             continue
 
-        # intro / reading / interact intro / Step 1 Explore
-        is_explore = (
-            s["counter"] is None
-            or (s.get("step") and ("step 1" in s["step"].lower() or "explore" in s["step"].lower()))
-            or ("arrow next to the character" in s["body"].lower() and q(t, "return document.querySelectorAll('a.chooseCaracterArrow').length ? 1 : 0;"))
-        )
-        if is_explore:
-            # Check if choose speaker exists for interact
-            if q(t, "return document.querySelectorAll('a.chooseCaracterArrow').length ? 1 : 0;"):
-                print("-- interact speaker selection")
-                t.js("(() => {const a=document.querySelectorAll('a.chooseCaracterArrow'); if(a.length) a[0].click(); return 1;})()")
-                time.sleep(2.0)
-                prev = None
-                continue
-
-            explore_done = t.js("""(() => {
-              const d = document.querySelectorAll('ed-la-dropdownlist')[1];
-              const ch = window.ng?.probe?.(d)?.componentInstance?.dropDownListObj?.Children;
-              return (ch && ch[0] && ch[0].Progress >= 0.999) ? 1 : 0;
-            })()""")
-
-            if not explore_done:
-                poll.wait_until(
-                    lambda: q(t, "return [...document.querySelectorAll('audio,video')].some(x=>(x.currentSrc||x.src))?1:0;"),
-                    lambda v: v == 1, timeout=3.0, interval=0.25)
-                played = solver.play_media(t, timeout=45, quick=False)
-                print(f"-- intro (media={'y' if played else 'n'})", flush=True)
-                # If no media elements (e.g. reading text), mark task progress via courseTreeService
-                if not played:
-                    t.js("""(() => {
-                      const comp = window.ng?.probe?.(document.querySelector('app'))?.componentInstance;
-                      const cts = comp?.navigationService?.backNextService?.courseTreeService;
-                      const d = document.querySelectorAll('ed-la-dropdownlist')[1];
-                      const ch = window.ng?.probe?.(d)?.componentInstance?.dropDownListObj?.Children;
-                      const exploreTasks = ch?.[0]?.Children || [];
-                      exploreTasks.forEach(task => {
-                        if (task && task.NodeId && cts?.setProgressAsync) {
-                          cts.setProgressAsync(task.NodeId);
-                        }
-                      });
-                    })()""")
-                    time.sleep(2.5)
-
-            if not advance(t):
-                nxt = solver.set_next_step(t)
-                print(f"-- fallback next step: {nxt}", flush=True)
-                if nxt == 'last step':
-                    require_lesson_complete(t)
-            prev = None
-            time.sleep(1.0)
-            continue
-
-        is_test = t.js("""(() => {
-            const app = ng.probe(document.querySelector('app'))?.componentInstance;
-            if (app?.isTestEnv) return true;
-            if (typeof app?.isStepTest === 'function' && app.isStepTest()) return true;
-            if (document.querySelector('.learning__submitTestLink')) return true;
-            const nav = app?.navigationService;
-            const name = (nav?._stepsList?.SelectedNode?.Name || '').toLowerCase();
-            if (name === 'test' || name === 'review') return true;
-            const dds = [...document.querySelectorAll('ed-la-dropdownlist')];
-            const stepTitle = dds.length > 1 ? (dds[1].innerText || '').toLowerCase() : '';
-            return /test|review/.test(stepTitle);
-        })()""")
-
+        is_test = t.js(IS_TEST_JS)
         if q(t, "return document.querySelectorAll('a.chooseCaracterArrow').length ? 1 : 0;"):
             is_test = False
+
         if is_test:
             out = handle_test(t, src)
         else:
+            # intro / reading / interact intro / Step 1 Explore
+            step_name = s.get("step", "").lower()
+            is_explore = (
+                "step 1" in step_name
+                or "explore" in step_name
+                or ("arrow next to the character" in s["body"].lower() and q(t, "return document.querySelectorAll('a.chooseCaracterArrow').length ? 1 : 0;"))
+                or (s["counter"] is None and "practice" not in step_name)
+            )
+            if is_explore:
+                # Check if choose speaker exists for interact
+                if q(t, "return document.querySelectorAll('a.chooseCaracterArrow').length ? 1 : 0;"):
+                    print("-- interact speaker selection")
+                    t.js("(() => {const a=document.querySelectorAll('a.chooseCaracterArrow'); if(a.length) a[0].click(); return 1;})()")
+                    time.sleep(2.0)
+                    prev = None
+                    continue
+
+                explore_done = t.js("""(() => {
+                  const d = document.querySelectorAll('ed-la-dropdownlist')[1];
+                  const ch = window.ng?.probe?.(d)?.componentInstance?.dropDownListObj?.Children;
+                  return (ch && ch[0] && ch[0].Progress >= 0.999) ? 1 : 0;
+                })()""")
+
+                if not explore_done:
+                    poll.wait_until(
+                        lambda: q(t, "return [...document.querySelectorAll('audio,video')].some(x=>(x.currentSrc||x.src))?1:0;"),
+                        lambda v: v == 1, timeout=3.0, interval=0.25)
+                    played = solver.play_media(t, timeout=45, quick=False)
+                    print(f"-- intro (media={'y' if played else 'n'})", flush=True)
+                    # If no media elements (e.g. reading text), mark task progress via courseTreeService
+                    if not played:
+                        t.js("""(() => {
+                          const comp = window.ng?.probe?.(document.querySelector('app'))?.componentInstance;
+                          const cts = comp?.navigationService?.backNextService?.courseTreeService;
+                          const d = document.querySelectorAll('ed-la-dropdownlist')[1];
+                          const ch = window.ng?.probe?.(d)?.componentInstance?.dropDownListObj?.Children;
+                          const exploreTasks = ch?.[0]?.Children || [];
+                          exploreTasks.forEach(task => {
+                            if (task && task.NodeId && cts?.setProgressAsync) {
+                              cts.setProgressAsync(task.NodeId);
+                            }
+                          });
+                        })()""")
+                        time.sleep(2.5)
+
+                if not advance(t):
+                    nxt = solver.set_next_step(t)
+                    print(f"-- fallback next step: {nxt}", flush=True)
+                    if nxt == 'last step':
+                        require_lesson_complete(t)
+                prev = None
+                time.sleep(1.0)
+                continue
+
             br = handle_branch(t, src)
             if br:
                 out = br
