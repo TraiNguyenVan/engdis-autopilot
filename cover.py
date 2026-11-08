@@ -210,20 +210,23 @@ def goto_lesson(t, unit_i, lesson_j, target_course=None):
             ensure_course(t, target_course)
         except Exception:
             pass
-    else:
+    # If the page was left inside learningArea from a prior step or inspection,
+    # ensure_course() did not navigate to HOME. Make sure the home unit tiles
+    # are rendered before firing GOTO_JS.
+    if not t.js("(() => location.href.includes('/Default.aspx') || document.querySelectorAll('.home__unitW').length > 0)()"):
         t.goto(HOME)
-        poll.wait_until(
-            lambda: t.js("(() => document.querySelectorAll('.home__unitW').length > 0)()"),
-            lambda v: bool(v), timeout=15.0, interval=0.3)
+    poll.wait_until(
+        lambda: t.js("(() => document.querySelectorAll('.home__unitW').length > 0)()"),
+        lambda v: bool(v), timeout=25.0, interval=0.3)
     res = 'no units'
-    for _ in range(5):
+    for _ in range(8):
         res = t.js(GOTO_JS % (unit_i, lesson_j))
         if isinstance(res, str) and res.startswith('ok'):
             break
         time.sleep(1.5)
     loaded = poll.wait_until(
         lambda: t.js("(() => location.href.includes('learningArea') && document.querySelectorAll('ed-la-dropdownlist').length >= 2)()"),
-        lambda v: bool(v), timeout=15.0, interval=0.3)
+        lambda v: bool(v), timeout=30.0, interval=0.3)
     if not loaded:
         return 'err nav timeout'
     return res

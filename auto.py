@@ -52,8 +52,20 @@ def st(t):
             return d[1] ? d[1].innerText.split('\\n')[0] : '';
         })()"""),
         "lesson": t.js("""(() => {const d=document.querySelectorAll('ed-la-dropdownlist'); return d[0]? d[0].innerText.split('\\n')[0] : '';})()"""),
-        "counter": t.js("""(() => {const c=document.querySelector('.learning__taskNavPCCurrentTask'); return c? c.innerText.trim(): null;})()"""),
-        "total": t.js("""(() => {const c=document.querySelector('.learning__taskNavPCTotalTasks'); return c? c.innerText.trim(): null;})()"""),
+        "counter": t.js("""(() => {
+            const c = document.querySelector('.learning__taskNavPCCurrentTask');
+            if (c && c.innerText.trim()) return c.innerText.trim();
+            const intro = document.querySelector('.learning__taskNavPagerCounterIW--intro');
+            if (intro && intro.innerText.trim()) return intro.innerText.trim();
+            const m = (document.querySelector('#pmContainer')?.innerText || '').match(/Question\\s+(\\d+)\\s+of\\s+(\\d+)/i);
+            return m ? m[1] : null;
+        })()"""),
+        "total": t.js("""(() => {
+            const c = document.querySelector('.learning__taskNavPCTotalTasks');
+            if (c && c.innerText.trim()) return c.innerText.trim();
+            const m = (document.querySelector('#pmContainer')?.innerText || '').match(/Question\\s+(\\d+)\\s+of\\s+(\\d+)/i);
+            return m ? m[2] : null;
+        })()"""),
         "body": t.js("(() => (document.body?.innerText || '').slice(0,600))()"),
         "unit": t.js("""(() => {const m = (document.body?.innerText||'').match(/Unit\\s+\\d+/i); return m ? m[0].replace(/\\s+/, ' ') : '';})()"""),
     }
@@ -70,10 +82,13 @@ def click_text(t, text):
 
 
 def purge_modals(t):
-    return q(t, """document.querySelectorAll('iframe#colorBoxIframe').forEach(f=>f.remove());
+    return q(t, """document.querySelectorAll('#btnOk, .utils__BSOKBtn, .modal-close').forEach(b=>{
+        try{b.click();}catch(e){}
+      });
+      document.querySelectorAll('iframe#colorBoxIframe').forEach(f=>f.remove());
       document.querySelectorAll('#colorbox,.colorbox').forEach(e=>e.remove());
       document.querySelectorAll('.modal-close, .modalW, .modal, .layout__alertModal, .modal-backdrop').forEach(e=>e.remove());
-      document.body.classList.remove('modal-open');
+      document.body?.classList?.remove('modal-open');
       const ed=document.querySelector('#EdoFrameBox'); if(ed) ed.style.display='none';
       return 1;""")
 
@@ -82,17 +97,44 @@ def advance(t, tries=3):
     """Purge blocking modals, then click Next until the counter changes."""
     def cur():
         return q(t, """const e=document.querySelector('.learning__taskNavPCCurrentTask');
+          const intro=document.querySelector('.learning__taskNavPagerCounterIW--intro')?.innerText.trim();
+          const qm=(document.querySelector('#pmContainer')?.innerText||'').match(/Question\\s+(\\d+)/i);
+          const qn=qm?qm[1]:null;
           const app=window.ng?.probe?.(document.querySelector('app'))?.componentInstance;
           const sIdx=app?.navigationService?._stepsList?.SelectedIndex;
+          const tIdx=app?.navigationService?._tasksList?.SelectedIndex;
           const d=document.querySelectorAll('ed-la-dropdownlist')[1];
           const dt=d?(d.innerText||'').trim().slice(0,14):'-';
-          return (e?e.innerText.trim():'-')+'|'+(sIdx!==undefined?sIdx:dt);""")
+          return (e?e.innerText.trim():(intro||qn||'-'))+'|'+(sIdx!==undefined?sIdx:dt)+'|'+(tIdx!==undefined?tIdx:'-');""")
     before = cur()
     for _ in range(tries):
         purge_modals(t)
         if not click(t, ".learning__taskNext"):
-            click(t, ".learning__nextItemLink")
-        now = poll.wait_until(cur, lambda v: v != before, timeout=4.0,
+            if not click(t, ".learning__nextItemLink"):
+                click(t, ".learning__taskNavPagerBtn--next")
+        now = poll.wait_until(cur, lambda v: v != before, timeout=2.5,
+                              interval=0.2, settle=0.2)
+        if now != before:
+            return True
+        # Angular navigation service fallback
+        t.js("""(() => {
+            const nextEl = document.querySelector('.learning__taskNext, .learning__nextItem');
+            const comp = nextEl ? window.ng?.probe?.(nextEl)?.componentInstance : null;
+            if (comp && typeof comp.onNextItemClick === 'function') {
+                try {
+                    comp.isNextDisabled = false;
+                    comp.onNextItemClick({preventDefault:()=>{}});
+                    return 1;
+                } catch(e) {}
+            }
+            const app = window.ng?.probe?.(document.querySelector('app'))?.componentInstance;
+            const bn = app?.navigationService?.backNextService;
+            if (bn && typeof bn.onNextClicked === 'function') {
+                try { bn.onNextClicked(); return 1; } catch(e) {}
+            }
+            return 0;
+        })()""")
+        now = poll.wait_until(cur, lambda v: v != before, timeout=3.5,
                               interval=0.2, settle=0.2)
         if now != before:
             return True
@@ -497,11 +539,15 @@ def main(max_iter=120):
         else:
             # intro / reading / interact intro / Step 1 Explore
             step_name = s.get("step", "").lower()
+            is_intro = (
+                s.get("counter") == "Intro"
+                or q(t, "return document.querySelector('.learning__taskNavPagerCounterIW--intro') ? 1 : 0;")
+            )
             is_explore = (
-                "step 1" in step_name
-                or "explore" in step_name
+                is_intro
+                or s["counter"] is None
+                or ("step 1" in step_name or "explore" in step_name)
                 or ("arrow next to the character" in s["body"].lower() and q(t, "return document.querySelectorAll('a.chooseCaracterArrow').length ? 1 : 0;"))
-                or (s["counter"] is None and "practice" not in step_name)
             )
             if is_explore:
                 # Check if choose speaker exists for interact
@@ -541,10 +587,11 @@ def main(max_iter=120):
                         time.sleep(2.5)
 
                 if not advance(t):
-                    nxt = solver.set_next_step(t)
-                    print(f"-- fallback next step: {nxt}", flush=True)
-                    if nxt == 'last step':
-                        require_lesson_complete(t)
+                    if not is_intro:
+                        nxt = solver.set_next_step(t)
+                        print(f"-- fallback next step: {nxt}", flush=True)
+                        if nxt == 'last step':
+                            require_lesson_complete(t)
                 prev = None
                 time.sleep(1.0)
                 continue
