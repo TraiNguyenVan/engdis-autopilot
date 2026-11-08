@@ -73,6 +73,8 @@ python3 cover.py 1 1 --course="Advanced 3" --test-only
 ├── bootstrap_browser.py   # Headless Chromium launcher with CDP health polling
 ├── compose.yaml           # Container definition with resource limits
 ├── Dockerfile             # Debian Bookworm container image with Chromium & FFmpeg
+├── skills/
+│   └── engdis-autopilot/  # Operational skill for AI coding agents
 ├── docs/                  # Detailed documentation
 │   ├── architecture.md    # Container containment & execution models
 │   ├── authentication.md  # Credential setup & secret mounting
@@ -82,6 +84,12 @@ python3 cover.py 1 1 --course="Advanced 3" --test-only
 │   └── spikes/            # Archived exploratory spikes and reverse-engineering probes
 └── tests/                 # Unit and container test suite
 ```
+
+---
+
+## Agent Operations
+
+If you are an AI coding agent operating this repository, inspect `skills/engdis-autopilot/SKILL.md` for exact operational procedures, CLI flags, fixture debugging workflows, and courseware failure recovery.
 
 ---
 
