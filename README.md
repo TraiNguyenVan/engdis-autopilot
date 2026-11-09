@@ -27,47 +27,37 @@ Pair **AnyRouter** (free reasoning router) with **Groq** (sub-second Whisper tra
 | **Google AI Studio** *(Alternative)* | All-in-one text + audio | `OPENAI_BASE_URL=https://generativelanguage.googleapis.com/v1beta/openai/`<br/>`OPENAI_MODEL=gemini-3.8-flash` | Free key at [aistudio.google.com](https://aistudio.google.com/) (15 RPM cap) |
 | **OpenRouter** | Fallback text reasoning | `OPENAI_BASE_URL=https://openrouter.ai/api/v1`<br/>`OPENAI_MODEL=google/gemini-2.0-flash-exp:free` | Free models (`:free`) at [openrouter.ai/keys](https://openrouter.ai/keys) |
 
-### 2. Run
-```bash
-# Docker Compose (preferred)
-ED_COURSE="<COURSE>" ED_UNITS="<UNITS>" ED_DRY_RUN=0 docker compose run --rm engdis
-ED_COURSE="<COURSE>" ED_UNITS="<UNITS>" ED_PASSES=2 ED_DRY_RUN=0 docker compose run --rm engdis
+## Running with AI Agents
 
-# Long-running inspect container (engdis_inspect)
-docker exec engdis_inspect python3 -u cover.py <UNITS> 2 --course="<COURSE>"               # Autonomous yield mode (rc=6 on stalls)
-docker exec engdis_inspect python3 -u cover.py <UNITS> 2 --course="<COURSE>" --unattended  # Unattended mode (skips stalls, keeps running)
-docker exec engdis_inspect python3 cover.py <UNIT_IDX> 1 --course="<COURSE>" --test-only
-```
+Compatible with Claude Code, Cursor, Copilot, Hermes, and Codex via [Agent Skills](https://agentskills.io).
+
+Copy-paste these prompts into your agent chat:
+
+- **Run Specific Unit, Lesson, or Range**:
+  > `/engdis-autopilot Run unit 2 lesson "News" in course "Advanced 2" inside Docker.`  
+  > `/engdis-autopilot Run units 0-4 in course "Advanced 3" inside Docker.`
+
+- **Unattended Mode (Non-Stop Overnight)**:
+  > `/engdis-autopilot Run unattended for course "Advanced 2" units 0-9. Skip stalls and finish the batch without waiting for input.`
+
+- **Agent Yield Mode (Auto-Patch Stalls)**:
+  > `/engdis-autopilot Run course "Advanced 2" unit 5 in agent mode. If stalled (rc=6), inspect the fixture in logs/fixtures/, patch solver.py, and resume.`
 
 ---
 
-## Delegating to AI Agents
+## Manual Execution (CLI Fallback)
 
-Compatible with [Agent Skills](https://agentskills.io) (Claude Code, Cursor, Copilot, Hermes, Codex, OpenClaw).
-See [CONTRIBUTING.md](CONTRIBUTING.md) for contribution guidelines, agent workflows, and offline reproducer steps.
+If running without an AI agent:
 
-<details open>
-<summary><b>Example Prompts</b> (click to collapse)</summary>
+```bash
+# Docker Compose (standard unattended run)
+ED_COURSE="Advanced 2" ED_UNITS="0-9" ED_DRY_RUN=0 docker compose run --rm engdis
 
-- **Unattended Background Run**:
-  > `/engdis-autopilot Run background supervisor for course "<COURSE>", units "<UNITS>", 2 passes. Run inside Docker, minimize chat interactions, and report final completion.`
-- **Fix Stalled Tasks from Fixture**:
-  > `/engdis-autopilot Autopilot stalled on a lesson. Inspect latest JSON in logs/fixtures/stuck_*.json. Check DOM HTML and task type, patch solver.py or auto.py, and verify with tests.`
-- **Targeted Single-Lesson Test**:
-  > `/engdis-autopilot Re-run failing test in unit <UNIT_IDX>, lesson "<LESSON_NAME>" with --test-only inside Docker. Confirm exit code 0.`
-
-*Syntax tips: `/engdis-autopilot` is default for Claude Code, Copilot, and Cursor Agent Mode. If your harness prefers mentions or file tags, `@engdis-autopilot`, `$engdis-autopilot`, or `@.agents/skills/engdis-autopilot/SKILL.md` also work.*
-</details>
-
-<details>
-<summary><b>Agent Operating Protocol</b> (click to expand)</summary>
-
-1. **Background Batch**: Launch `cover.py` in background to prevent chat context token burn.
-2. **Autonomous Yield Protocol (`rc=6`)**: When an exercise stalls (4 unchanged ticks), `auto.py` dumps fixture JSON + screenshot to `logs/fixtures/stuck_*.json`, emits `[AGENT-ACTION-REQUIRED]` to `stderr`, and exits with `rc=6`. The supervisor propagates `rc=6` and terminates immediately to wake the agent.
-3. **Unattended Execution Mode**: Pass `--unattended` or set `ED_UNATTENDED=1` for headless overnight runs without an agent. Stalls will still dump fixtures but log a warning, skip the stalled task, and continue the batch without exiting.
-4. **Targeted Fix**: Isolate fix with `--lesson="..."`, `--step="..."`, or `--test-only`.
-5. **Test Gate**: Run `python3 -m unittest discover -s tests` before pushing.
-</details>
+# Targeted unit/lesson or modes via container
+docker exec engdis_inspect python3 cover.py 2 1 --course="Advanced 2" --lesson="News"
+docker exec engdis_inspect python3 cover.py 0-9 2 --course="Advanced 2" --unattended
+docker exec engdis_inspect python3 cover.py 5 1 --course="Advanced 2"  # exits rc=6 on stall for manual inspection
+```
 
 ---
 
