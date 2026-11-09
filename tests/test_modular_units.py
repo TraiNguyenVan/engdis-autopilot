@@ -76,19 +76,20 @@ class TestUnitLoader(unittest.TestCase):
         self.assertEqual(normalize_course_slug("Custom Course Name!"), "custom_course_name")
         self.assertEqual(normalize_course_slug(None), "generic")
 
-    def test_get_unit_handler_finds_unit(self):
-        # Unit 4 in Advanced 2 (0-based index 3)
-        handler = get_unit_handler("Advanced 2", 3, "Too Much Work")
-        self.assertIsInstance(handler, Unit04TooMuchWork)
-        self.assertEqual(handler.course, "a2")
-        self.assertEqual(handler.unit_index, 3)
+    def test_get_unit_handler_finds_all_a2_units(self):
+        # Verify loader discovers all created units across Advanced 2
+        for idx in range(10):
+            handler = get_unit_handler("Advanced 2", idx)
+            self.assertNotIsInstance(handler, DefaultUnit)
+            self.assertEqual(handler.course, "a2")
+            self.assertEqual(handler.unit_index, idx)
 
     def test_get_unit_handler_fallback_to_default(self):
-        # Non-existent unit handler returns DefaultUnit
-        handler = get_unit_handler("Advanced 2", 9, "Review")
+        # Non-existent unit handler (index 99) returns DefaultUnit
+        handler = get_unit_handler("Advanced 2", 99, "Review")
         self.assertIsInstance(handler, DefaultUnit)
         self.assertEqual(handler.course, "a2")
-        self.assertEqual(handler.unit_index, 9)
+        self.assertEqual(handler.unit_index, 99)
         # Default unit returns None for task and test answers
         self.assertIsNone(handler.on_task(None, {"type": "mcq"}))
         self.assertIsNone(handler.get_test_answer("Review", "q1"))
