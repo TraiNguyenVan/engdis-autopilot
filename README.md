@@ -49,14 +49,16 @@ Copy-paste these prompts into your agent chat:
 
 If running without an AI agent:
 
-```bash
-# Docker Compose (standard unattended run)
-ED_COURSE="Advanced 2" ED_UNITS="0-9" ED_DRY_RUN=0 docker compose run --rm engdis
+> **Important**: The harness defaults to **Agent Yield mode** (halts on stalls with `rc=6` for an agent to fix). For manual non-stop execution, always add `--unattended` (or `ED_UNATTENDED=1`) so it skips stalls and finishes the run.
 
-# Targeted unit/lesson or modes via container
-docker exec engdis_inspect python3 cover.py 2 1 --course="Advanced 2" --lesson="News"
-docker exec engdis_inspect python3 cover.py 0-9 2 --course="Advanced 2" --unattended
-docker exec engdis_inspect python3 cover.py 5 1 --course="Advanced 2"  # exits rc=6 on stall for manual inspection
+```bash
+# Docker Compose (unattended non-stop run)
+ED_COURSE="Advanced 2" ED_UNITS="0-9" ED_UNATTENDED=1 ED_DRY_RUN=0 docker compose run --rm engdis
+
+# Targeted unit/lesson via container
+docker exec engdis_inspect python3 cover.py 0-9 2 --course="Advanced 2" --unattended  # Recommended: skips stalls
+docker exec engdis_inspect python3 cover.py 2 1 --course="Advanced 2" --lesson="News" --unattended
+docker exec engdis_inspect python3 cover.py 5 1 --course="Advanced 2"  # Agent mode: exits rc=6 on stall
 ```
 
 ---
