@@ -5,7 +5,7 @@ from unittest.mock import MagicMock, Mock, patch
 
 from core.base_unit import BaseUnit, DefaultUnit
 from core.unit_loader import get_unit_handler, normalize_course_slug
-from units.a2.u04 import Unit04TooMuchWork
+from units.a2.u03 import Unit03TooMuchWork
 import cover
 
 
@@ -53,7 +53,7 @@ class TestBaseUnit(unittest.TestCase):
         self.assertTrue(unit.is_lesson_satisfied(lesson_data, min_score=100.0))
 
     def test_unit_handler_custom_override(self):
-        handler = Unit04TooMuchWork()
+        handler = Unit03TooMuchWork()
         self.assertIsNone(handler.on_task(None, {"type": "mcq"}))
 
 
@@ -117,7 +117,7 @@ class TestAutoUnitIntegration(unittest.TestCase):
             def js(self, script):
                 return ""
 
-        handler = Unit04TooMuchWork()
+        handler = Unit03TooMuchWork()
         handler.on_task = Mock(return_value="mcq: override")
 
         with patch.object(auto.solver, "dom_transcript", return_value=""), \

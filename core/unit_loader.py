@@ -39,18 +39,16 @@ def get_unit_handler(
     """
     slug = normalize_course_slug(course_name)
 
-    # 1-based unit number (what users/LMS call Unit 1..10)
-    u_num_1based = unit_index + 1
-    # 0-based unit number
-    u_num_0based = unit_index
+    # 0-based unit number (index in LMS array)
+    u_idx = unit_index
 
     candidate_modules = [
-        f"units.{slug}.u{u_num_1based:02d}",
-        f"units.{slug}.u{u_num_1based}",
-        f"units.{slug}.unit_{u_num_1based:02d}",
-        f"units.{slug}.unit_{u_num_1based}",
-        f"units.{slug}.u{u_num_0based:02d}",
-        f"units.{slug}.u{u_num_0based}",
+        f"units.{slug}.u{u_idx:02d}",
+        f"units.{slug}.u{u_idx}",
+        f"units.{slug}.unit_{u_idx:02d}",
+        f"units.{slug}.unit_{u_idx}",
+        f"units.{slug}.u{u_idx + 1:02d}",
+        f"units.{slug}.u{u_idx + 1}",
     ]
 
     for mod_name in candidate_modules:
