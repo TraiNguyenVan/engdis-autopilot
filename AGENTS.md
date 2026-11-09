@@ -44,9 +44,11 @@ The English Discoveries courseware (ED22 / PTIT LMS) is an Angular SPA backed by
 - **Cause**: Moving to Practice before Explore media completes leaves Step 1 at `progress: 0`.
 - **Fix**: Check `Progress >= 0.999`. If Explore is already marked done on LMS, skip media replay and switch straight to Practice via `solver.set_step(t, 1)`. If incomplete, set `playbackRate = 16.0` on all audio/video elements and poll `currentTime >= duration - 0.5` or `ended`.
 
-### Speaking Gate Failure (`rc=3 SPEAK-BLOCKED`)
-- **Cause**: Lessons with microphone practice (`Interact 1`, `Practice 1`) stall on audio permission dialogs or speech evaluation timeouts.
-- **Fix**: Always run Chromium with `--use-fake-device-for-media-stream --use-fake-ui-for-media-stream`. Click `.button.continue` / `Start`, stream fake audio for 3.5s, and verify completion. If platform throws error 505 or loops on `Try again`, exit immediately with `rc=3` to avoid wasting retry budgets.
+### Speaking Gate Failure (`rc=3 SPEAK-BLOCKED`) - Known Limitation
+- **Status**: **Unsupported / Not Solved Yet**. Genuine mic audio synthesis (TTS pipe to virtual mic) is not implemented.
+- **Cause**: Lessons with microphone practice (`Interact 1`, `Practice 1`, e.g. Lesson 3 across most units) require spoken audio. Headless Chromium feeds fake silence (`--use-fake-device-for-media-stream`), which the LMS server-side ASR rejects with "Try again".
+- **Expected Behavior**: Lessons containing speaking tasks will deliberately fail closed with `rc=3 SPEAK-BLOCKED` after 3 failed attempts, capping at **67% progress**.
+- **Agent Rule**: **Do NOT treat 67% on speaking lessons as an actionable bug or stall.** Do not attempt to retry or fix them in code until a virtual audio loopback/TTS bridge is added. The supervisor records them in the `blocked` set and safely skips them on later passes.
 
 ### Sequence Reordering Widgets
 - **Cause**: Sequence items in `.sequenceZone` start pre-filled across target slots without a staging bank.

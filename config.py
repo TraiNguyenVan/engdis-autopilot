@@ -74,3 +74,8 @@ OPENAI_MODEL: str = os.environ.get("OPENAI_MODEL") or os.environ.get("ED_LLM_MOD
 LLM_URL: str = _build_chat_completions_url(OPENAI_BASE_URL)
 LLM_KEY: str = OPENAI_API_KEY
 LLM_MODELS: List[str] = [m.strip() for m in OPENAI_MODEL.split(",") if m.strip()]
+
+# Groq Whisper STT Configuration
+GROQ_API_KEY: str = os.environ.get("GROQ_API_KEY", "")
+GROQ_BASE_URL: str = os.environ.get("GROQ_BASE_URL", "https://api.groq.com/openai/v1")
+GROQ_WHISPER_MODEL: str = os.environ.get("GROQ_WHISPER_MODEL", "whisper-large-v3-turbo")

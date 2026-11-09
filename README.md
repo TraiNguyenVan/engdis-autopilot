@@ -16,6 +16,17 @@ cp .env.example .env
 docker compose build
 ```
 
+#### Recommended Free Providers (Zero-Cost Setup)
+
+Pair **AnyRouter** (free reasoning router) with **Groq** (sub-second Whisper transcription) for an optimal, completely free setup:
+
+| Service | Role | Configuration | Where to Get API Key |
+| :--- | :--- | :--- | :--- |
+| **AnyRouter** *(Recommended)* | Text / MCQ / Writing reasoning | `OPENAI_BASE_URL=https://anyrouter.dev/api/v1`<br/>`OPENAI_MODEL=anyrouter/free` | Sign up & create key at [anyrouter.dev/keys](https://anyrouter.dev/keys) |
+| **Groq Whisper** *(Recommended)* | Listening audio STT (~0.5s) | `GROQ_API_KEY=gsk_...`<br/>`GROQ_WHISPER_MODEL=whisper-large-v3-turbo` | Free API key at [console.groq.com/keys](https://console.groq.com/keys) |
+| **Google AI Studio** *(Alternative)* | All-in-one text + audio | `OPENAI_BASE_URL=https://generativelanguage.googleapis.com/v1beta/openai/`<br/>`OPENAI_MODEL=gemini-2.0-flash` | Free key at [aistudio.google.com](https://aistudio.google.com/) (15 RPM cap) |
+| **OpenRouter** | Fallback text reasoning | `OPENAI_BASE_URL=https://openrouter.ai/api/v1`<br/>`OPENAI_MODEL=google/gemini-2.0-flash-exp:free` | Free models (`:free`) at [openrouter.ai/keys](https://openrouter.ai/keys) |
+
 ### 2. Run
 ```bash
 # Docker Compose (preferred)

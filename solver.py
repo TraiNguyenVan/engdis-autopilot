@@ -185,6 +185,41 @@ def media_url(t):
       return a? (a.currentSrc||a.src): null;})()""")
 
 
+def transcribe_groq(mp3_path: str) -> str:
+    """Transcribe audio file via Groq Whisper API (fast & free)."""
+    if not config.GROQ_API_KEY or not os.path.exists(mp3_path):
+        return ""
+    try:
+        boundary = "----WebKitFormBoundary7MA4YWxkTrZu0gW"
+        with open(mp3_path, "rb") as f:
+            mp3_data = f.read()
+        body = bytearray()
+        body.extend(f"--{boundary}\r\nContent-Disposition: form-data; name=\"model\"\r\n\r\n{config.GROQ_WHISPER_MODEL}\r\n".encode())
+        body.extend(f"--{boundary}\r\nContent-Disposition: form-data; name=\"file\"; filename=\"audio.mp3\"\r\nContent-Type: audio/mpeg\r\n\r\n".encode())
+        body.extend(mp3_data)
+        body.extend(f"\r\n--{boundary}--\r\n".encode())
+
+        url = f"{config.GROQ_BASE_URL.rstrip('/')}/audio/transcriptions"
+        req = urllib.request.Request(
+            url,
+            data=bytes(body),
+            headers={
+                "Authorization": f"Bearer {config.GROQ_API_KEY}",
+                "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko)",
+                "Content-Type": f"multipart/form-data; boundary={boundary}",
+            },
+        )
+        resp = urllib.request.urlopen(req, timeout=45)
+        res = json.loads(resp.read().decode())
+        text = res.get("text", "").strip()
+        if text:
+            print(f"groq whisper transcribed ({len(text)} chars)", flush=True)
+            return text
+    except Exception as e:
+        print(f"! groq whisper failed: {e}", flush=True)
+    return ""
+
+
 def transcript_for(url, cache_key):
     path = os.path.join(SCRATCH, f"tr_{cache_key}.txt")
     if os.path.exists(path):
@@ -194,9 +229,17 @@ def transcript_for(url, cache_key):
         subprocess.run(["ffmpeg", "-v", "error", "-y", "-i", url, "-vn", "-ac", "1", "-ar", "16000", mp3], check=False)
     if not os.path.exists(mp3):
         return ""
-    b64 = base64.b64encode(open(mp3, "rb").read()).decode()
-    txt = ask("Transcribe this audio exactly. Output only the transcript.", audio_b64=b64, max_tokens=2000)
-    open(path, "w").write(txt)
+
+    # 1. Try Groq Whisper STT first if configured
+    txt = transcribe_groq(mp3)
+
+    # 2. Fall back to multimodal LLM input_audio
+    if not txt:
+        b64 = base64.b64encode(open(mp3, "rb").read()).decode()
+        txt = ask("Transcribe this audio exactly. Output only the transcript.", audio_b64=b64, max_tokens=2000)
+
+    if txt:
+        open(path, "w").write(txt)
     return txt
 
 

@@ -57,6 +57,10 @@ if [ -n "${ED_COURSE:-}" ]; then
   EXTRA_ARGS+=("--course=${ED_COURSE}")
 fi
 
+if [ $# -gt 0 ]; then
+  exec "$@"
+fi
+
 python3 /app/cover.py "${TARGET_UNITS}" "${ED_PASSES}" "${EXTRA_ARGS[@]}"
 RC=$?
 

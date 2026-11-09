@@ -23,11 +23,13 @@ All parameters are configured via environment variables and can be supplied via 
 
 ## LLM & Multimodal Audio Transcription
 
-The harness uses a single OpenAI-compatible endpoint for both text reasoning and audio comprehension:
+The harness uses an OpenAI-compatible endpoint for text reasoning, with optional dedicated Groq Whisper for audio transcription:
 
-- **No external ASR keys needed**: No Groq, Whisper, or Deepgram API key required. Audio clips from listening exercises are base64-encoded and sent directly via standard `input_audio` chat completions.
-- **Multimodal requirement**: For listening tasks, ensure `OPENAI_MODEL` points to a model with audio input support (e.g. Gemini 2.0/1.5 Flash via proxy, `gpt-4o-audio-preview`, or compatible OpenAI-like providers).
-- **Fallback chain**: Specify comma-separated model names (e.g. `primary-model,backup-model`). The runner automatically tries the next model if an API error occurs.
+- **Recommended Free Setup (AnyRouter + Groq)**:
+  - **Reasoning**: Set `OPENAI_BASE_URL=https://anyrouter.dev/api/v1` and `OPENAI_MODEL=anyrouter/free`. Get free key at [anyrouter.dev/keys](https://anyrouter.dev/keys).
+  - **Audio STT**: Set `GROQ_API_KEY=gsk_...` with model `whisper-large-v3-turbo`. Transcribes listening tests in ~0.5s at zero cost. Get free key at [console.groq.com/keys](https://console.groq.com/keys).
+- **Multimodal LLM Fallback**: If `GROQ_API_KEY` is omitted, the harness falls back to sending base64 audio directly via `input_audio` chat completions to `OPENAI_MODEL` (e.g. Gemini 2.0 Flash via Google AI Studio at [aistudio.google.com](https://aistudio.google.com/)).
+- **Fallback Chain**: Specify comma-separated model names (e.g. `primary-model,backup-model`). The runner automatically tries the next model if an API error occurs.
 
 ## Local Configuration (`.env`)
 

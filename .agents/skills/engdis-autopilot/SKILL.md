@@ -83,13 +83,13 @@ document.querySelectorAll('audio,video').forEach(m => {
 This triggers server completion beacons in 2–4 seconds instead of waiting full media duration.
 If Step 1 Explore shows `Progress >= 0.999`, skip media replay immediately and switch to Step 2 Practice via dropdown `solver.set_step(t, 1)`.
 
-### 3. Speaking Gates & Fake Stream Simulation
-Interactive speaking tasks (`Interact 1` / `Practice 1`) require audio input.
+### 3. Speaking Gates & Fake Stream Simulation (Known Limitation)
+Interactive speaking tasks (`Interact 1` / `Practice 1`) require audio input and are **not yet solved** without virtual mic TTS synthesis.
 With `--use-fake-device-for-media-stream`:
 1. Click `.button.continue` / `Start`.
-2. Wait 3.5s while streaming fake audio.
-3. Verify task counter changes or `done=True`.
-If microphone error 505 or repeated `Try again` occurs, record as `SPEAK-BLOCKED` (rc=3) to prevent burning supervisor restart budgets.
+2. Wait 3.5s while streaming fake silence audio.
+3. If platform returns `Try again` or mic error, exit immediately with `SPEAK-BLOCKED` (rc=3).
+Lessons containing speaking exercises cap at 67% progress. Do not treat 67% on speaking lessons as actionable bugs or stalls.
 
 ### 4. Course Navigation Drift Guard
 When recovering from modal locks or step-switch stalls via `t.goto(HOME)`, always verify and re-bind active course:

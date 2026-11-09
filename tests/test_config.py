@@ -17,6 +17,9 @@ class TestConfig(unittest.TestCase):
             self.assertEqual(config.REPORT_DIR, ".")
             self.assertEqual(config.CRED_PATH, "")
             self.assertEqual(config.DRY_RUN, False)
+            self.assertEqual(config.GROQ_API_KEY, "")
+            self.assertEqual(config.GROQ_BASE_URL, "https://api.groq.com/openai/v1")
+            self.assertEqual(config.GROQ_WHISPER_MODEL, "whisper-large-v3-turbo")
 
     def test_custom_env_openai(self):
         custom_env = {
