@@ -17,16 +17,7 @@ class BaseUnit:
     unit_index: int = 0
     unit_name: str = ""
 
-    # Verified 100% test answers: { lesson_id_or_name: { question_matcher: answer_data } }
-    test_answers: Dict[Union[int, str], Any] = {}
-
-    # Audio/Video transcripts: { media_id_or_title: transcript_text }
-    transcripts: Dict[str, str] = {}
-
-    # Custom drag-and-drop zone maps: { template_or_question: { item: target_zone } }
-    zone_maps: Dict[str, Dict[str, str]] = {}
-
-    # Custom selectors / button mappings
+    # Custom widget selectors or DOM overrides if unit layout deviates
     custom_selectors: Dict[str, str] = {}
 
     def __init__(self, course: str = "", unit_index: int = 0, unit_name: str = ""):
@@ -43,11 +34,7 @@ class BaseUnit:
         min_score: float = 100.0,
         force: bool = False,
     ) -> bool:
-        """Evaluate if lesson is truly complete.
-
-        Prevents false positives on finished accounts where progress is 100%
-        but test score is low (e.g. 40% or 60%).
-        """
+        """Evaluate if lesson is truly complete."""
         if force:
             return False
 
@@ -55,12 +42,10 @@ class BaseUnit:
         if prog < 0.999:
             return False
 
-        # If overall lesson score exists and is below threshold, it's not satisfied
         lesson_score = lesson_meta.get("score")
         if lesson_score is not None and _num(lesson_score) < min_score:
             return False
 
-        # Inspect step-level score if available (e.g. Test step)
         steps = lesson_meta.get("steps") or []
         for step in steps:
             s_name = (step.get("name") or "").lower()
@@ -71,43 +56,12 @@ class BaseUnit:
 
         return True
 
-    def get_test_answer(
-        self,
-        lesson_name_or_idx: Union[int, str],
-        question_text: str,
-        options: Optional[List[str]] = None,
-    ) -> Optional[Any]:
-        """Lookup deterministic verified test answer for 100% score."""
-        # 1. Exact lesson match
-        answers = self.test_answers.get(lesson_name_or_idx)
-        if not answers and isinstance(lesson_name_or_idx, str):
-            # Try case-insensitive or substring match
-            for k, v in self.test_answers.items():
-                if isinstance(k, str) and k.lower() in lesson_name_or_idx.lower():
-                    answers = v
-                    break
-
-        if not answers:
-            return None
-
-        # 2. Match question text or index
-        if question_text in answers:
-            return answers[question_text]
-
-        # Case-insensitive substring match on question
-        q_clean = question_text.strip().lower()
-        for q_key, ans in answers.items():
-            if str(q_key).lower() in q_clean or q_clean in str(q_key).lower():
-                return ans
-
-        return None
-
     def on_before_lesson(self, tab: Any, lesson_meta: Dict[str, Any]) -> None:
         """Lifecycle hook before lesson automation begins."""
         pass
 
     def on_task(self, tab: Any, task_state: Dict[str, Any]) -> Optional[str]:
-        """Custom task solver override. Return str if handled, None to fallback."""
+        """Custom task solver override if a unit needs specific DOM handling."""
         return None
 
     def on_after_lesson(

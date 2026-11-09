@@ -52,19 +52,9 @@ class TestBaseUnit(unittest.TestCase):
         lesson_data["steps"][2]["score"] = 100
         self.assertTrue(unit.is_lesson_satisfied(lesson_data, min_score=100.0))
 
-    def test_get_test_answer(self):
-        unit = Unit04TooMuchWork()
-        # Exact match
-        self.assertEqual(unit.get_test_answer("Do vs. Make", "do homework"), "do")
-        self.assertEqual(unit.get_test_answer("Do vs. Make", "make a decision"), "make")
-        # Substring match on lesson name and question
-        self.assertEqual(
-            unit.get_test_answer("Lesson 5: Common Errors: Do vs. Make", "Please do homework today"),
-            "do",
-        )
-        # Non-existent answer returns None
-        self.assertIsNone(unit.get_test_answer("Do vs. Make", "completely unknown question"))
-        self.assertIsNone(unit.get_test_answer("Unknown Lesson", "any question"))
+    def test_unit_handler_custom_override(self):
+        handler = Unit04TooMuchWork()
+        self.assertIsNone(handler.on_task(None, {"type": "mcq"}))
 
 
 class TestUnitLoader(unittest.TestCase):
@@ -90,9 +80,8 @@ class TestUnitLoader(unittest.TestCase):
         self.assertIsInstance(handler, DefaultUnit)
         self.assertEqual(handler.course, "a2")
         self.assertEqual(handler.unit_index, 99)
-        # Default unit returns None for task and test answers
+        # Default unit returns None for task overrides
         self.assertIsNone(handler.on_task(None, {"type": "mcq"}))
-        self.assertIsNone(handler.get_test_answer("Review", "q1"))
 
 
 class TestCompletedAccountFilter(unittest.TestCase):
@@ -121,27 +110,6 @@ class TestCompletedAccountFilter(unittest.TestCase):
 
 
 class TestAutoUnitIntegration(unittest.TestCase):
-    def test_handle_test_uses_unit_transcript(self):
-        import auto
-
-        class Tab:
-            def js(self, script):
-                if "audio,video" in script:
-                    return "https://ed22.engdis.com/media/audio/a2glsqe.mp3"
-                return ""
-
-        handler = Unit04TooMuchWork()
-
-        with patch.object(auto.solver, "dom_transcript", return_value=""), \
-             patch.object(auto.solver, "do_task", return_value="mcq: picked A") as mock_do_task, \
-             patch.object(auto, "q", return_value=0), \
-             patch.object(auto, "st", return_value={"total": "2", "counter": "1"}), \
-             patch.object(auto.poll, "wait_until"):
-            res = auto.handle_test(Tab(), "Test question", unit_handler=handler, lesson_name="Sequence")
-            self.assertEqual(res, "mcq: picked A")
-            called_src = mock_do_task.call_args[0][1]
-            self.assertIn("Sequence listening task transcript", called_src)
-
     def test_handle_test_uses_unit_task_override(self):
         import auto
 
@@ -150,14 +118,14 @@ class TestAutoUnitIntegration(unittest.TestCase):
                 return ""
 
         handler = Unit04TooMuchWork()
-        handler.on_task = Mock(return_value="mcq: 100% verified")
+        handler.on_task = Mock(return_value="mcq: override")
 
         with patch.object(auto.solver, "dom_transcript", return_value=""), \
              patch.object(auto, "q", return_value=0), \
              patch.object(auto, "st", return_value={"total": "2", "counter": "1"}), \
              patch.object(auto.poll, "wait_until"):
             res = auto.handle_test(Tab(), "Test question", unit_handler=handler, lesson_name="Too Much Work")
-            self.assertEqual(res, "mcq: 100% verified")
+            self.assertEqual(res, "mcq: override")
             handler.on_task.assert_called_once()
 
 

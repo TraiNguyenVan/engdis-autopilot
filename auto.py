@@ -225,24 +225,19 @@ def handle_test(t, src, unit_handler=None, lesson_name=""):
             src = "[TRANSCRIPT]\n" + dt + "\n\n" + src
             print(f"test dom-transcript ({len(dt)} chars)", flush=True)
         else:
-            # 2. Fallback to audio download + ASR or unit handler transcript
+            # 2. Fallback to audio download + ASR
             url = t.js("""(() => {const m=[...document.querySelectorAll('audio,video')]
             .map(x=>x.currentSrc||x.src).filter(Boolean); return m.length?m[m.length-1]:'';})()""")
             if url:
                 key = url.rsplit('/', 1)[-1].rsplit('.', 1)[0]
-                if unit_handler and key in getattr(unit_handler, "transcripts", {}):
-                    tr = unit_handler.transcripts[key]
+                try:
+                    tr = solver.transcript_for(url, key)
+                except Exception as e:
+                    tr = ''
+                    print("! transcript %s: %s" % (key, str(e)[:140]), flush=True)
+                if tr:
                     src = "[TRANSCRIPT]\n" + tr + "\n\n" + src
-                    print("test unit-transcript", key, len(tr))
-                else:
-                    try:
-                        tr = solver.transcript_for(url, key)
-                    except Exception as e:
-                        tr = ''
-                        print("! transcript %s: %s" % (key, str(e)[:140]), flush=True)
-                    if tr:
-                        src = "[TRANSCRIPT]\n" + tr + "\n\n" + src
-                        print("test transcript", key, len(tr))
+                    print("test transcript", key, len(tr))
     out = None
     if unit_handler:
         out = unit_handler.on_task(t, {"type": "test", "src": src, "lesson": lesson_name})
