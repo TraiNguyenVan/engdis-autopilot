@@ -28,7 +28,7 @@ The harness uses an OpenAI-compatible endpoint for text reasoning, with optional
 - **Recommended Free Setup (AnyRouter + Groq)**:
   - **Reasoning**: Set `OPENAI_BASE_URL=https://anyrouter.dev/api/v1` and `OPENAI_MODEL=anyrouter/free`. Get free key at [anyrouter.dev/keys](https://anyrouter.dev/keys).
   - **Audio STT**: Set `GROQ_API_KEY=gsk_...` with model `whisper-large-v3-turbo`. Transcribes listening tests in ~0.5s at zero cost. Get free key at [console.groq.com/keys](https://console.groq.com/keys).
-- **Multimodal LLM Fallback**: If `GROQ_API_KEY` is omitted, the harness falls back to sending base64 audio directly via `input_audio` chat completions to `OPENAI_MODEL` (e.g. Gemini 2.0 Flash via Google AI Studio at [aistudio.google.com](https://aistudio.google.com/)).
+- **Multimodal LLM Fallback**: If `GROQ_API_KEY` is omitted, the harness falls back to sending base64 audio directly via `input_audio` chat completions to `OPENAI_MODEL` (e.g. Gemini 3.8 Flash via Google AI Studio at [aistudio.google.com](https://aistudio.google.com/)).
 - **Fallback Chain**: Specify comma-separated model names (e.g. `primary-model,backup-model`). The runner automatically tries the next model if an API error occurs.
 
 ## Local Configuration (`.env`)
