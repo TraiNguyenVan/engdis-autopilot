@@ -8,6 +8,7 @@ import edlib, login, poll, solver
 import config
 import cover
 from diag_logger import DiagnosticLogger
+from core.unit_loader import get_unit_handler
 
 diag = DiagnosticLogger(log_dir="logs_diag")
 
@@ -214,7 +215,7 @@ def handle_branch(t, src):
     return "branch: " + opts[idx][:40]
 
 
-def handle_test(t, src):
+def handle_test(t, src, unit_handler=None, lesson_name=""):
     """Answer a test question set, submit on the last one."""
     # Listening tests score 40% if answered blind; transcribe the audio once per test.
     if "[TRANSCRIPT]" not in src:
@@ -224,20 +225,29 @@ def handle_test(t, src):
             src = "[TRANSCRIPT]\n" + dt + "\n\n" + src
             print(f"test dom-transcript ({len(dt)} chars)", flush=True)
         else:
-            # 2. Fallback to audio download + ASR
+            # 2. Fallback to audio download + ASR or unit handler transcript
             url = t.js("""(() => {const m=[...document.querySelectorAll('audio,video')]
             .map(x=>x.currentSrc||x.src).filter(Boolean); return m.length?m[m.length-1]:'';})()""")
             if url:
                 key = url.rsplit('/', 1)[-1].rsplit('.', 1)[0]
-                try:
-                    tr = solver.transcript_for(url, key)
-                except Exception as e:
-                    tr = ''
-                    print("! transcript %s: %s" % (key, str(e)[:140]), flush=True)
-                if tr:
+                if unit_handler and key in getattr(unit_handler, "transcripts", {}):
+                    tr = unit_handler.transcripts[key]
                     src = "[TRANSCRIPT]\n" + tr + "\n\n" + src
-                    print("test transcript", key, len(tr))
-    out = solver.do_task(t, src)
+                    print("test unit-transcript", key, len(tr))
+                else:
+                    try:
+                        tr = solver.transcript_for(url, key)
+                    except Exception as e:
+                        tr = ''
+                        print("! transcript %s: %s" % (key, str(e)[:140]), flush=True)
+                    if tr:
+                        src = "[TRANSCRIPT]\n" + tr + "\n\n" + src
+                        print("test transcript", key, len(tr))
+    out = None
+    if unit_handler:
+        out = unit_handler.on_task(t, {"type": "test", "src": src, "lesson": lesson_name})
+    if out is None:
+        out = solver.do_task(t, src)
     # A speaking step can slip through as a test while the LMS keeps a hidden
     # test container (`.testResultTools`, `.learning__submitTestLink`) in the
     # practice DOM. The test solver returns "other" there, so hand the widget
@@ -364,6 +374,7 @@ def main(max_iter=120):
     unit_lock = ""
     lesson_lock = ""
     target_step_jumped = False
+    unit_handler = None
     for _ in range(max_iter):
         s = st(t)
         if "Member Login" in (s.get("body") or ""):
@@ -379,6 +390,12 @@ def main(max_iter=120):
         elif s.get("unit") and s["unit"] != unit_lock:
             print("UNIT-CHANGED", unit_lock, "->", s["unit"])
             sys.exit(4)
+        if not unit_handler and s.get("unit"):
+            course = os.environ.get("ED_COURSE")
+            raw_u_idx = os.environ.get("ED_UNIT_INDEX")
+            u_idx = int(raw_u_idx) if raw_u_idx and raw_u_idx.isdigit() else 0
+            unit_handler = get_unit_handler(course, u_idx, s.get("unit") or "")
+            print(f"loaded unit handler: {unit_handler.__class__.__name__} ({unit_handler.course} unit {unit_handler.unit_index})")
         # bounced back to the dashboard: no lesson open, nothing to solve
         if not s.get("lesson") and t.js("(() => !document.querySelector('ed-la-dropdownlist') && !!document.querySelector('.home__unitW'))()"):
             print("NO-LESSON (dashboard) — open a lesson first")
@@ -444,20 +461,26 @@ def main(max_iter=120):
 
         # If no explicit target step requested, automatically jump to the first incomplete step
         if not target_step_name and not target_step_jumped:
-            first_incomplete_js = """(() => {
+            min_target_score = 100 if os.environ.get("ED_UNATTENDED") == "1" else 80
+            first_incomplete_js = f"""(() => {{
               const dd1 = document.querySelectorAll('ed-la-dropdownlist')[1];
               const comp = dd1 ? window.ng?.probe?.(dd1)?.componentInstance : null;
               const children = comp?.dropDownListObj?.Children || [];
               if (!children.length) return null;
-              const idx = children.findIndex(c => {
+              const idx = children.findIndex(c => {{
                 const p = Number(c.Progress);
+                const isTest = (c.Name || '').toLowerCase().includes('test');
+                if (isTest) {{
+                  const s = c.Score !== undefined && c.Score !== null ? Number(c.Score) : null;
+                  if (s !== null && s < {min_target_score}) return true;
+                }}
                 return isNaN(p) || p < 0.999;
-              });
-              if (idx > 0) {
-                return {index: idx, name: children[idx].Name};
-              }
+              }});
+              if (idx > 0) {{
+                return {{index: idx, name: children[idx].Name}};
+              }}
               return null;
-            })()"""
+            }})()"""
             inc = t.js(first_incomplete_js)
             if isinstance(inc, dict) and inc.get("index"):
                 target_step_jumped = True
@@ -535,7 +558,7 @@ def main(max_iter=120):
             is_test = False
 
         if is_test:
-            out = handle_test(t, src)
+            out = handle_test(t, src, unit_handler=unit_handler, lesson_name=s.get("lesson", ""))
         else:
             # intro / reading / interact intro / Step 1 Explore
             step_name = s.get("step", "").lower()
@@ -619,7 +642,12 @@ def main(max_iter=120):
                   if(a.includes('Start') || document.querySelector('.openSpeech__btnStart, .openSpeech__btn, .speakingInteract')) return 'speak';
                   return 'other';
                 })()""")
-                if kind == "speak":
+                custom_out = None
+                if unit_handler:
+                    custom_out = unit_handler.on_task(t, {"type": kind, "src": src, "lesson": s.get("lesson", ""), "step": s.get("step", ""), "counter": s.get("counter")})
+                if custom_out is not None:
+                    out = custom_out
+                elif kind == "speak":
                     out = handle_speaking(t, src)
                     sk = ("speak", s["lesson"], s["step"], s["counter"])
                     speak_tries[sk] = speak_tries.get(sk, 0) + 1

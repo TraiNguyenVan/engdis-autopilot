@@ -17,6 +17,7 @@ import time
 
 import edlib, login, poll
 import config
+from core.unit_loader import get_unit_handler
 
 HOME = "https://ed22.engdis.com/ptithcm#/home"
 HERE = os.path.dirname(os.path.abspath(__file__))
@@ -46,7 +47,12 @@ HOME_JS = """(() => {
     units: (c.units||[]).map((u,i) => ({
       i: i, name: u.Name, progress: u.Progress,
       lessons: (u.Children||[]).map((l,j) => ({
-        j: j, name: l.Name, id: l.NodeId, progress: l.Progress, done: !!l.IsDone
+        j: j, name: l.Name, id: l.NodeId, progress: l.Progress, done: !!l.IsDone,
+        score: (l.Score !== undefined && l.Score !== null) ? l.Score : null,
+        steps: (l.Children||[]).map((st, k) => ({
+          k: k, name: st.Name, id: st.NodeId, progress: st.Progress, done: !!st.IsDone,
+          score: (st.Score !== undefined && st.Score !== null) ? st.Score : null
+        }))
       }))
     }))
   };
@@ -326,7 +332,14 @@ def parse_unit_specs(spec, total_units=10):
     return valid
 
 
-def filter_lessons(lessons: list[dict], lesson_spec: str | None = None, test_only: bool = False, skips: list[str] | None = None) -> list[dict]:
+def filter_lessons(
+    lessons: list[dict],
+    lesson_spec: str | None = None,
+    test_only: bool = False,
+    skips: list[str] | None = None,
+    force: bool = False,
+    min_score: float | None = None,
+) -> list[dict]:
     skips = [s.lower() for s in (skips or [])]
     filtered = []
     for l in lessons:
@@ -335,8 +348,25 @@ def filter_lessons(lessons: list[dict], lesson_spec: str | None = None, test_onl
         p = _num(l.get("progress"))
         if any(k in name.lower() for k in skips):
             continue
-        if test_only and (p < 0.60 or p >= 0.999):
-            continue
+        if test_only and not force:
+            if p < 0.60:
+                continue
+            if p >= 0.999:
+                s = l.get("score")
+                if min_score is None or (s is not None and _num(s) >= min_score):
+                    continue
+        if min_score is not None and not force:
+            if p >= 0.999:
+                s = l.get("score")
+                if s is not None and _num(s) >= min_score:
+                    continue
+                if s is None and l.get("steps"):
+                    test_steps = [
+                        st for st in l.get("steps", [])
+                        if "test" in (st.get("name") or "").lower() or st.get("is_test")
+                    ]
+                    if test_steps and all(st.get("score") is not None and _num(st.get("score")) >= min_score for st in test_steps):
+                        continue
         if lesson_spec is not None:
             raw = str(lesson_spec).strip()
             if raw.isdigit() and int(raw) != j:
@@ -348,7 +378,8 @@ def filter_lessons(lessons: list[dict], lesson_spec: str | None = None, test_onl
 
 
 def cover_unit(t, unit_i, passes=2, dry=False, skips=None, target_course=None,
-               lesson_spec=None, test_only=False, target_step=None, unattended=False):
+               lesson_spec=None, test_only=False, target_step=None, unattended=False,
+               force=False, min_score=None):
     skips = skips or []
     if target_course:
         try:
@@ -360,9 +391,11 @@ def cover_unit(t, unit_i, passes=2, dry=False, skips=None, target_course=None,
         print(f"no home data or invalid unit index {unit_i}")
         return None
     unit = h["units"][unit_i]
+    unit_handler = get_unit_handler(h.get("course"), unit_i, unit["name"])
+    effective_min_score = min_score if min_score is not None else (100.0 if unattended else 80.0)
     c_prefix = f"[{h.get('course')}] " if h.get("course") else ""
     print(f"\n==========================================")
-    print(f"{c_prefix}UNIT {unit_i}: {unit['name']} {pct(unit['progress'])} | {len(unit['lessons'])} lessons")
+    print(f"{c_prefix}UNIT {unit_i}: {unit['name']} {pct(unit['progress'])} | {len(unit['lessons'])} lessons (handler: {unit_handler.__class__.__name__})")
     print(f"==========================================")
 
     report = {
@@ -370,6 +403,7 @@ def cover_unit(t, unit_i, passes=2, dry=False, skips=None, target_course=None,
         "course_id": h.get("courseId"),
         "unit": unit["name"],
         "unit_index": unit_i,
+        "handler": unit_handler.__class__.__name__,
         "lessons": {},
         "passes": passes
     }
@@ -385,8 +419,12 @@ def cover_unit(t, unit_i, passes=2, dry=False, skips=None, target_course=None,
                 print(f"warning: ensure_course pass {p} failed: {e}")
         h = home_state(t)
         unit = h["units"][unit_i]
-        unblocked = [l for l in unit["lessons"] if _num(l["progress"]) < 0.999 and l["name"] not in blocked]
-        todo = filter_lessons(unblocked, lesson_spec=lesson_spec, test_only=test_only, skips=skips)
+        unblocked = [
+            l for l in unit["lessons"]
+            if (force or not unit_handler.is_lesson_satisfied(l, min_score=effective_min_score, force=force))
+            and l["name"] not in blocked
+        ]
+        todo = filter_lessons(unblocked, lesson_spec=lesson_spec, test_only=test_only, skips=skips, force=force, min_score=effective_min_score)
         if not todo:
             print("all lessons complete")
             break
@@ -408,6 +446,9 @@ def cover_unit(t, unit_i, passes=2, dry=False, skips=None, target_course=None,
                 extra_env["ED_COURSE"] = target_course
             if unattended:
                 extra_env["ED_UNATTENDED"] = "1"
+            if force:
+                extra_env["ED_FORCE"] = "1"
+            extra_env["ED_UNIT_INDEX"] = str(unit_i)
             if target_step:
                 extra_env["ED_TARGET_STEP"] = target_step
             elif test_only:
@@ -470,6 +511,8 @@ def main():
     lesson_spec = next((f.split("=", 1)[1] for f in flags if f.startswith("--lesson=")), None)
     target_step = next((f.split("=", 1)[1] for f in flags if f.startswith("--step=")), None)
     test_only = "--test-only" in flags
+    force = "--force" in flags or "--retest" in flags or os.environ.get("ED_FORCE") == "1"
+    min_score = next((float(f.split("=", 1)[1]) for f in flags if f.startswith("--min-score=")), None)
     unattended = "--unattended" in flags or os.environ.get("ED_UNATTENDED") == "1"
 
     target_course = None
@@ -506,7 +549,8 @@ def main():
             print("STOP file present, stopping multi-unit walk")
             break
         rep = cover_unit(t, u_idx, passes=passes, dry=dry, skips=skips, target_course=target_course,
-                         lesson_spec=lesson_spec, test_only=test_only, target_step=target_step, unattended=unattended)
+                         lesson_spec=lesson_spec, test_only=test_only, target_step=target_step, unattended=unattended,
+                         force=force, min_score=min_score)
         if rep:
             all_reports.append(rep)
 
