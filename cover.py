@@ -442,8 +442,9 @@ def cover_unit(t, unit_i, passes=2, dry=False, skips=None, target_course=None,
                 report["lessons"][l["name"]] = {"nav": str(nav)}
                 continue
             extra_env = {}
-            if target_course:
-                extra_env["ED_COURSE"] = target_course
+            effective_course = target_course or h.get("course")
+            if effective_course:
+                extra_env["ED_COURSE"] = effective_course
             if unattended:
                 extra_env["ED_UNATTENDED"] = "1"
             if force:

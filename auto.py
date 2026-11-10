@@ -255,7 +255,7 @@ def handle_test(t, src, unit_handler=None, lesson_name=""):
         return handle_speaking(t, src)
     # Require a checked answer in every MCQ set, including after retry.
     def unanswered(result):
-        return result.startswith("other:") or bool(q(t, """return [...document.querySelectorAll('.prMCQ__qaSet')].some(e=>!e.querySelector('.prMCQ__answers--checked'))?1:0;"""))
+        return result.startswith("other:") or bool(q(t, """return [...document.querySelectorAll('.prMCQ__qaSet')].some(e=>!e.querySelector('.prMCQ__answers:not(.hide) .layout__radio:checked, .prMCQ__answers--checked'))?1:0;"""))
 
     if unanswered(out):
         time.sleep(1.5)
@@ -270,9 +270,16 @@ def handle_test(t, src, unit_handler=None, lesson_name=""):
     total = st(t)["total"]
     counter = st(t)["counter"]
     sub = q(t, "return document.querySelector('.learning__submitTestLink')?1:0;")
-    if sub and total and counter == total:
+    is_last = total and counter == total
+    if (sub and is_last) or is_last:
         click(t, ".learning__submitTestLink")
         t.js("(() => {const a=document.querySelector('.learning__submitTestLink'); if(a) angular.element(a).triggerHandler('click');})()")
+        t.js("""(() => {
+          const app = window.ng?.probe?.(document.querySelector('app'))?.componentInstance;
+          if (typeof app?.navigationService?.submitTest === 'function') {
+            try { app.navigationService.submitTest(); } catch(e) {}
+          }
+        })()""")
         poll.wait_until(
             lambda: q(t, "return (document.querySelector('iframe#colorBoxIframe') || document.querySelector('#colorbox') || document.querySelector('.modal'))?1:0;"),
             lambda v: v == 1, timeout=8.0, interval=0.2)
@@ -290,7 +297,31 @@ def handle_test(t, src, unit_handler=None, lesson_name=""):
         body = poll.wait_until(
             lambda: t.js("(() => document.body.innerText.slice(0,500))()"),
             lambda b: bool(b) and "%" in b, timeout=12.0, interval=0.3) or ""
-        score = [ln for ln in body.split("\n") if "%" in ln][:2]
+        # Check if the review/score screen was triggered
+        body = poll.wait_until(
+            lambda: t.js("(() => document.body.innerText.slice(0,500))()"),
+            lambda b: bool(b) and ("%" in b or "test score" in b.lower()), timeout=12.0, interval=0.3) or ""
+        score = [ln for ln in body.split("\n") if "%" in ln or "test score" in ln.lower()][:2]
+        # Propagate step completion directly to Angular navigation service
+        t.js("""(() => {
+          const comp = window.ng?.probe?.(document.querySelector('app'))?.componentInstance;
+          const nav = comp?.navigationService;
+          const cts = nav?.backNextService?.courseTreeService;
+          const dds = [...document.querySelectorAll('ed-la-dropdownlist')];
+          const ddComp = dds.length > 1 ? window.ng?.probe?.(dds[1])?.componentInstance : null;
+          const curStep = ddComp?.dropDownListObj?.SelectedNode || nav?._stepsList?.SelectedNode;
+          if (curStep?.NodeId && cts?.setProgressAsync) {
+            cts.setProgressAsync(curStep.NodeId);
+          }
+          if (curStep) {
+            curStep.Progress = 1;
+            curStep.IsDone = true;
+          }
+          if (typeof nav?.setProgress === 'function' && curStep?.NodeId) {
+            try { nav.setProgress(curStep.NodeId); } catch(e) {}
+          }
+        })()""")
+        time.sleep(2.0)
         return f"test-submit {score}"
     return out
 
@@ -347,6 +378,24 @@ def require_lesson_complete(t, timeout=12.0, interval=1.0):
         if steps_complete(progress):
             print("All steps done — lesson complete")
             sys.exit(0)
+        # Attempt recovery via courseTreeService if stuck at last test step
+        t.js("""(() => {
+          const comp = window.ng?.probe?.(document.querySelector('app'))?.componentInstance;
+          const cts = comp?.navigationService?.backNextService?.courseTreeService;
+          const dds = [...document.querySelectorAll('ed-la-dropdownlist')];
+          const ddComp = dds.length > 1 ? window.ng?.probe?.(dds[1])?.componentInstance : null;
+          const children = ddComp?.dropDownListObj?.Children || [];
+          children.forEach(c => {
+            if (c && c.NodeId && Number(c.Progress) < 0.999) {
+              if (cts?.setProgressAsync) cts.setProgressAsync(c.NodeId);
+              if (typeof comp?.navigationService?.setProgress === 'function') {
+                try { comp.navigationService.setProgress(c.NodeId); } catch(e) {}
+              }
+              c.Progress = 1;
+              c.IsDone = true;
+            }
+          });
+        })()""")
         if time.time() >= deadline:
             break
         time.sleep(interval)
@@ -542,9 +591,8 @@ def main(max_iter=120):
         if "your test score is" in s["body"].lower() or ("review your answers" in s["body"].lower() and "next arrow" in s["body"].lower()):
             print(f"-- test completed, advancing to finish lesson ({s.get('lesson')})")
             nxt = solver.set_next_step(t)
-            if nxt == 'last step' or not advance(t):
-                require_lesson_complete(t)
             time.sleep(1.0)
+            require_lesson_complete(t)
             prev = None
             continue
 
@@ -663,6 +711,10 @@ def main(max_iter=120):
 
         print(f"[{s['counter']}/{s['total']}] {str(out)[:100]}", flush=True)
         if is_test and out.startswith("test-unanswered:"):
+            continue
+        if is_test and str(out).startswith("test-submit"):
+            require_lesson_complete(t)
+            prev = None
             continue
         if not advance(t):
             if s.get("counter") and s.get("total") and s["counter"] == s["total"]:

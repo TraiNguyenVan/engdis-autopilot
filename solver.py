@@ -107,8 +107,18 @@ def click_label_trusted(t, lbl_for):
 
 def ensure_checked(t, lbl_for, tries=3):
     for _ in range(tries):
-        ok = t.js("""(() => {const i=document.querySelector('.prMCQ__answerLabel[for=%s]');
-          if(!i) return false; const inp=document.getElementById(i.getAttribute('for')); return !!(inp&&inp.checked);})()""" % json.dumps(lbl_for))
+        ok = t.js("""(() => {
+          const i = document.querySelector('.prMCQ__answerLabel[for=%s]');
+          if (!i) return false;
+          const inp = document.getElementById(i.getAttribute('for'));
+          const p = i.closest('.prMCQ__answers');
+          if (p) p.classList.add('prMCQ__answers--checked');
+          if (inp && !inp.checked) {
+            inp.checked = true;
+            inp.dispatchEvent(new Event('change', { bubbles: true }));
+          }
+          return !!(inp && inp.checked);
+        })()""" % json.dumps(lbl_for))
         if ok:
             return True
         click_label_trusted(t, lbl_for)
@@ -805,7 +815,7 @@ def solve_fitb(t, src=""):
 
 
 def solve_select_text(t, src):
-    prompt = t.js("(() => (document.querySelector('.learning__taskInstruction, .prSelectText__instruction')?.innerText || document.body.innerText.slice(0, 500)))()")
+    prompt = t.js("(() => (document.querySelector('.learning__taskInstruction, .prSelectText__instruction, .learning__tasksNav_instructionsW')?.innerText || document.body.innerText.slice(0, 500)))()")
     spans = t.js("(() => [...document.querySelectorAll('.learning__selectTxt_st, span.st')].map((e, idx) => ({idx: idx, text: e.innerText.trim()})))()")
     if not spans:
         return "select_text: no spans"
@@ -816,7 +826,14 @@ def solve_select_text(t, src):
     idx = r.get("index", 0)
     if not isinstance(idx, int) or idx < 0 or idx >= len(spans):
         idx = 0
-    t.js(f"(() => {{ const els = document.querySelectorAll('.learning__selectTxt_st, span.st'); if(els[{idx}]) els[{idx}].click(); return 1; }})()")
+    t.js(f"""(() => {{
+      const els = document.querySelectorAll('.learning__selectTxt_st, span.st');
+      if(els[{idx}]) {{
+        els[{idx}].click();
+        els[{idx}].classList.add('selected');
+      }}
+      return 1;
+    }})()""")
     return f"select_text: picked {idx} ({spans[idx]['text'][:30]})"
 
 

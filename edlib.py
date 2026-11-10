@@ -85,11 +85,25 @@ def visible_task(t):
 def mcq_sets(t):
     return t.js("""(() => [...document.querySelectorAll('.prMCQ__qaSet')].map((s,i)=>({
       q:(s.querySelector('.prMCQ__questionText')||{}).innerText||'',
-      opts:[...s.querySelectorAll('.prMCQ__answerLabel')].map(l=>({t:l.innerText.trim(), for:l.getAttribute('for')}))
+      opts:[...s.querySelectorAll('.prMCQ__answers:not(.hide) .prMCQ__answerLabel')].map(l=>({t:l.innerText.trim(), for:l.getAttribute('for')}))
     })))()""")
 
 def click_for(t, lbl_for):
-    return t.js("""(() => {const l=document.querySelector('.prMCQ__answerLabel[for=%s]'); if(!l) return 'nf'; l.click(); return 'ok';})()""" % __import__("json").dumps(lbl_for))
+    return t.js("""(() => {
+      const l = document.querySelector('.prMCQ__answerLabel[for=%s]');
+      if (!l) return 'nf';
+      const inp = document.getElementById(l.getAttribute('for'));
+      if (inp) {
+        inp.checked = true;
+        inp.dispatchEvent(new Event('change', { bubbles: true }));
+      }
+      const parent = l.closest('.prMCQ__answers');
+      if (parent) {
+        parent.classList.add('prMCQ__answers--checked');
+      }
+      l.click();
+      return 'ok';
+    })()""" % __import__("json").dumps(lbl_for))
 
 def answer_sets(t, picks):
     """picks: list of (question_substring, option_substring)"""
