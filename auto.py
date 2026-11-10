@@ -283,20 +283,18 @@ def handle_test(t, src, unit_handler=None, lesson_name=""):
         poll.wait_until(
             lambda: q(t, "return (document.querySelector('iframe#colorBoxIframe') || document.querySelector('#colorbox') || document.querySelector('.modal'))?1:0;"),
             lambda v: v == 1, timeout=8.0, interval=0.2)
-        t.js("""(() => {const f=[...document.querySelectorAll('iframe#colorBoxIframe')].pop();
-          if(f && f.contentDocument) {
-            const d=f.contentDocument;
-            const b=[...d.querySelectorAll('input[type=button],input[type=submit],button,a')]
-              .filter(e=>/ok|continue|submit|yes|confirm/i.test((e.value||e.innerText||'').trim()));
-            if(b.length) { b[b.length-1].click(); return 1; }
-          }
-          const b2=[...document.querySelectorAll('#colorbox input, #colorbox button, #colorbox a, .modal button')]
+        confirm_res = t.js("""(() => {
+          let b = [...document.querySelectorAll('iframe#colorBoxIframe')].flatMap(f => {
+            try { return [...(f.contentDocument || f.contentWindow.document).querySelectorAll('input, button, a')]; } catch(e) { return []; }
+          }).filter(e=>/ok|continue|submit|yes|confirm/i.test((e.value||e.innerText||'').trim()));
+          if(b.length) { b[b.length-1].click(); return 'iframe-clicked'; }
+
+          let b2 = [...document.querySelectorAll('#colorbox input, #colorbox button, #colorbox a, .modal button, .modal a')]
             .filter(e=>/ok|continue|submit|yes|confirm/i.test((e.value||e.innerText||'').trim()));
-          if(b2.length) { b2[b2.length-1].click(); return 2; }
-          return 0;})()""")
-        body = poll.wait_until(
-            lambda: t.js("(() => document.body.innerText.slice(0,500))()"),
-            lambda b: bool(b) and "%" in b, timeout=12.0, interval=0.3) or ""
+          if(b2.length) { b2[b2.length-1].click(); return 'colorbox-clicked'; }
+          return 'none';
+        })()""")
+        print(f"submit modal confirm result: {confirm_res}", flush=True)
         # Check if the review/score screen was triggered
         body = poll.wait_until(
             lambda: t.js("(() => document.body.innerText.slice(0,500))()"),
@@ -513,7 +511,8 @@ def main(max_iter=120):
               if (!children.length) return null;
               const idx = children.findIndex(c => {{
                 const p = Number(c.Progress);
-                const isTest = (c.Name || '').toLowerCase().includes('test');
+                const sName = (c.Name || '').toLowerCase();
+                const isTest = sName.includes('test') || sName.includes('review');
                 if (isTest) {{
                   const s = c.Score !== undefined && c.Score !== null ? Number(c.Score) : null;
                   if (s !== null && s < {min_target_score}) return true;
@@ -578,8 +577,9 @@ def main(max_iter=120):
             continue
 
         # test entry screen
-        if q(t, "return document.querySelector('.btnStartTest')?1:0;"):
-            click(t, ".btnStartTest")
+        start_btn_present = q(t, "return document.querySelector('.btnStartTest, button.btnStartTest, input.btnStartTest') || [...document.querySelectorAll('button, input[type=button], a')].some(e=>/start test/i.test((e.innerText||e.value||'').trim()))?1:0;")
+        if start_btn_present:
+            t.js("(() => { const b = document.querySelector('.btnStartTest') || [...document.querySelectorAll('button, input[type=button], a')].find(e=>/start test/i.test((e.innerText||e.value||'').trim())); if(b) b.click(); })()")
             print("test started")
             poll.wait_until(
                 lambda: q(t, "const e=document.querySelector('.learning__taskNavPCCurrentTask'); return e?e.innerText.trim():null;"),
