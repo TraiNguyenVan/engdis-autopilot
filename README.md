@@ -68,10 +68,12 @@ docker exec engdis_inspect python3 cover.py 5 1 --course="Advanced 2"  # Agent m
 flowchart TD
     subgraph Container [Docker Environment - engdis / engdis_inspect]
         Supervisor[cover.py<br/><i>Batch Supervisor</i>]
-        Runner[auto.py<br/><i>Task Navigator</i>]
-        Solver[solver.py<br/><i>Exercise Solver</i>]
-        Driver[driver.py<br/><i>CDP Controller</i>]
-        Login[login.py<br/><i>LMS Authentication</i>]
+        Runner[core/unit_loader.py<br/><i>Dynamic Unit Loader</i>]
+        Unit[units/<b>u00-u10</b>.py<br/><i>One Unit One File</i>]
+        Base[core/base_unit.py<br/><i>Unit Base Class</i>]
+        Solver[core/generic_solver.py<br/><i>Exercise Solver</i>]
+        Driver[core/driver.py<br/><i>CDP Controller</i>]
+        Login[core/edlib.py<br/><i>LMS Auth &amp; Helpers</i>]
 
         subgraph Browser [Headless Chromium :9225]
             LMS[English Discoveries SPA<br/><i>Angular / ed22.engdis.com</i>]
@@ -92,15 +94,16 @@ flowchart TD
 
     subgraph Agent [Coding Agent / Human]
         Yield[Agent Yield Protocol<br/><i>rc=6 + Action Required</i>]
-        Patch[Offline Reproduction<br/><i>tests/test_stuck_cases.py</i>]
+        Patch[Offline Reproduction<br/><i>tests/test_modular_units.py</i>]
     end
 
-    Supervisor -->|spawns worker per lesson| Runner
-    Supervisor -->|ensures valid session| Login
+    Supervisor -->|spawns worker per unit| Runner
+    Runner -->|loads unit module| Unit
+    Unit -->|inherits from| Base
     Runner -->|executes step loop| Solver
     Solver -->|evaluates prompt & choices| LLM
     Solver -->|transcribes listening tasks| ASR
-    Runner -->|sends CDP commands| Driver
+    Runner -->|CDP commands| Driver
     Driver -->|WebSocket CDP :9225| LMS
     Driver -->|16x playback rate| Media
     Driver -->|virtual mic stream| FakeAudio
@@ -138,6 +141,13 @@ flowchart TD
 ├── asr.py                 # Audio extraction and base64 transcription client
 ├── poll.py                # Predicate polling and backoff utilities
 ├── bootstrap_browser.py   # Headless Chromium launcher with CDP health polling
+├── edlib.py               # Shared LMS helpers and tab/state utilities
+├── core/                  # Modular runtime (unit loader, base classes)
+│   ├── base_unit.py
+│   └── unit_loader.py
+├── units/                 # Per-unit handlers ("One Unit One File")
+│   ├── a2/                # u00.py ... u09.py
+│   └── a3/
 ├── compose.yaml           # Container definition with resource limits
 ├── Dockerfile             # Debian Bookworm container image with Chromium & FFmpeg
 ├── CONTRIBUTING.md        # Contribution guide, offline testing protocol & PR gates
