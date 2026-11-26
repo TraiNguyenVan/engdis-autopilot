@@ -353,8 +353,58 @@ def solve_multi(t, src):
     return "multi: " + ", ".join(items[i - 1]["t"][:30] for i in idx)
 
 
+_BANK_ZONE = "TTpTablePlaceHolder"
+_DRAG_DROP_OFFSETS = ((0, 0), (-25, 0), (25, 0), (0, -6), (0, 6))
+
+
+def _is_bank_zone(z):
+    return bool(z) and (z.get("n") == _BANK_ZONE or z.get("id") == _BANK_ZONE)
+
+
+def _clamp_drop_offset(z, dx, dy, fallback_box=None):
+    w = z.get("w") if z.get("w") is not None else z.get("width")
+    if w is None and isinstance(fallback_box, dict):
+        w = fallback_box.get("w")
+    if isinstance(w, (int, float)) and not isinstance(w, bool) and w > 0:
+        max_dx = max(0.0, w / 2.0 - min(4.0, w / 4.0))
+        dx = max(-max_dx, min(max_dx, dx))
+    h = z.get("h") if z.get("h") is not None else z.get("height")
+    if h is None and isinstance(fallback_box, dict):
+        h = fallback_box.get("h")
+    if isinstance(h, (int, float)) and not isinstance(h, bool) and h > 0:
+        max_dy = max(0.0, h / 2.0 - min(3.0, h / 4.0))
+        dy = max(-max_dy, min(max_dy, dy))
+    return dx, dy
+
+
+def _scroll_drag_into_view(t, zone_sel, word):
+    meta = t.js("""(() => {
+      const want = %s.toLowerCase();
+      const z = document.querySelector(%s);
+      const items = [...document.querySelectorAll('.dnditem')];
+      const it = items.find(e => e.innerText.trim().toLowerCase() === want)
+              || items.find(e => e.innerText.toLowerCase().includes(want));
+      const h = window.innerHeight || document.documentElement.clientHeight || 800;
+      const w = window.innerWidth || document.documentElement.clientWidth || 1280;
+      const out = el => {
+        if (!el || !el.scrollIntoView) return false;
+        const r = el.getBoundingClientRect();
+        return r.top < 0 || r.bottom > h || r.left < 0 || r.right > w;
+      };
+      let scrolled = 0;
+      if (out(it)) { it.scrollIntoView({block: 'nearest', inline: 'nearest'}); scrolled = 1; }
+      if (out(z)) { z.scrollIntoView({block: 'nearest', inline: 'nearest'}); scrolled = 1; }
+      const zr = z ? z.getBoundingClientRect() : null;
+      return {scrolled: scrolled, w: zr ? zr.width : null, h: zr ? zr.height : null};
+    })()""" % (json.dumps(str(word).strip()), json.dumps(zone_sel)))
+    if isinstance(meta, dict) and meta.get("scrolled") == 1:
+        time.sleep(0.1)
+    return meta if isinstance(meta, dict) else None
+
+
 def _drag_snapshot(t):
     res = t.js("""(() => {
+      const isBank = z => z.getAttribute('dg_name') === 'TTpTablePlaceHolder' || z.id === 'TTpTablePlaceHolder';
       const zones = [...document.querySelectorAll('.dndZone')].map(z => {
         let label = '';
         const row = z.closest('.prMT_T2T__answersRow, .prSeq__zone--txt, tr, .answersRow');
@@ -364,11 +414,12 @@ def _drag_snapshot(t):
         }
         return {
           n: z.getAttribute('dg_name'),
+          id: z.id || '',
           label: label,
           items: [...z.querySelectorAll('.dnditem')].map(x => x.innerText.trim())
         };
       });
-      const b = [...document.querySelectorAll('.dndZone')].find(z => z.getAttribute('dg_name') === 'TTpTablePlaceHolder');
+      const b = [...document.querySelectorAll('.dndZone')].find(isBank);
       const bank = b ? [...b.querySelectorAll('.dnditem')].map(x => x.innerText.trim()) : [];
       return { zones: zones, bank: bank };
     })()""") or {}
@@ -377,20 +428,22 @@ def _drag_snapshot(t):
 
 def solve_drag(t, src):
     zones, bank = _drag_snapshot(t)
-    target_zones = [z for z in zones if z["n"] != "TTpTablePlaceHolder"]
+    target_zones = [z for z in zones if not _is_bank_zone(z)]
+    bank_sel = f'.dndZone[dg_name="{_BANK_ZONE}"], #{_BANK_ZONE}'
     if target_zones and all(z["items"] for z in target_zones):
         print("-- drag: zones pre-filled; clearing and re-dropping")
         for z in target_zones:
             for item_text in z["items"]:
+                _scroll_drag_into_view(t, bank_sel, item_text)
                 rr = edlib.rects(t)
                 it = next((i for i in rr["items"] if i["t"].strip() == item_text.strip()), None)
-                bz = next((zz for zz in rr["zones"] if zz["n"] == "TTpTablePlaceHolder"), None)
+                bz = next((zz for zz in rr["zones"] if _is_bank_zone(zz)), None)
                 if not it or not bz:
                     continue
                 t.drag_xy(it["cx"], it["cy"], bz["cx"], bz["cy"])
                 time.sleep(0.5)
         zones, bank = _drag_snapshot(t)
-        target_zones = [z for z in zones if z["n"] != "TTpTablePlaceHolder"]
+        target_zones = [z for z in zones if not _is_bank_zone(z)]
         if target_zones and all(z["items"] for z in target_zones):
             return "drag: already"
     prompt = t.js("""(() => {
@@ -412,16 +465,19 @@ def solve_drag(t, src):
     if not mapping:
         return "drag: EMPTY-MAP"
     # clear zones whose current item is not the desired one
-    bank_zone = "TTpTablePlaceHolder"
     for zid, word in mapping.items():
+        zid = str(zid)
+        if zid == _BANK_ZONE:
+            continue
         cur = t.js(f"""(() => {{const z=document.querySelector('.dndZone[dg_name="{zid}"]'); return z? [...z.querySelectorAll('.dnditem')].map(x=>x.innerText.trim()):[];}})()""")
         for item_text in (cur or []):
             if str(word).strip().lower() in item_text.lower():
                 continue
             for _ in range(3):
+                _scroll_drag_into_view(t, bank_sel, item_text)
                 rr = edlib.rects(t)
                 it = next((i for i in rr["items"] if i["t"].strip() == item_text.strip()), None)
-                bz = next((z for z in rr["zones"] if z["n"] == bank_zone), None)
+                bz = next((z for z in rr["zones"] if _is_bank_zone(z)), None)
                 if not it or not bz:
                     break
                 t.drag_xy(it["cx"], it["cy"], bz["cx"], bz["cy"])
@@ -430,8 +486,12 @@ def solve_drag(t, src):
     done = []
     for zid, word in mapping.items():
         zid = str(zid)
+        if zid == _BANK_ZONE:
+            continue
         ok = False
-        for attempt in range(4):
+        zone_sel = f'.dndZone[dg_name="{zid}"]'
+        for dx, dy in _DRAG_DROP_OFFSETS:
+            meta = _scroll_drag_into_view(t, zone_sel, word)
             rects = edlib.rects(t)
             item = next((i for i in rects["items"] if i["t"].strip().lower() == str(word).strip().lower()), None)
             if not item:
@@ -439,7 +499,8 @@ def solve_drag(t, src):
             z = next((x for x in rects["zones"] if x["n"] == zid), None)
             if not item or not z:
                 break
-            t.drag_xy(item["cx"], item["cy"], z["cx"], z["cy"] + (attempt - 1) * 4)
+            cdx, cdy = _clamp_drop_offset(z, dx, dy, fallback_box=meta)
+            t.drag_xy(item["cx"], item["cy"], z["cx"] + cdx, z["cy"] + cdy)
             time.sleep(0.8)
             now = t.js(f"""(() => {{const z=document.querySelector('.dndZone[dg_name="{zid}"]');
               return z? [...z.querySelectorAll('.dnditem')].map(x=>x.innerText.trim()):[];}})()""")
