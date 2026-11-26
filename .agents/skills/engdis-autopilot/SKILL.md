@@ -28,11 +28,10 @@ Operational procedures for AI coding agents running, diagnosing, and repairing t
 - **Graded midterms/finals live in the Assessment Center**, outside the unit/lesson
   tree. Never call a unit lesson test a graded exam.
 - `cover.py` cannot open an Assessment Center exam because it navigates the course
-  tree. If the task is authorized, the user opens the exam manually; `auto.py` may
-  operate on the already-open tab because the question widgets are shared. This
-  candidate procedure is unverified here: no Assessment Center fixture or live-run
-  evidence. Do not imply it is proven safe; require explicit authorization before
-  any live graded submission.
+  tree. The agent can use the visible browser to locate and open the user's
+  explicitly authorized attempt, then attach `auto.py` to its tab. This candidate
+  procedure is unverified here: no Assessment Center fixture or live-run evidence.
+  Do not imply it is proven safe.
 - For routine course work, use the `cover.py` supervisor in Agent Yield mode by
   default. Monitor progress and inspect/fix stalls; neither `cover.py` nor the solver
   guarantees 100% completion or scores. Reserve `--unattended` for practice/coverage
@@ -42,10 +41,12 @@ Operational procedures for AI coding agents running, diagnosing, and repairing t
   with a small non-critical run and confirm progress/results before scaling up.
 - The Assessment Center prompt belongs near the top of `README.md`, in its own
   exam section. Use an `<EXAM_TYPE>` placeholder and ask for unclear details.
-  Require an explicitly authorized attempt, an already-open exam in visible local
-  Chrome, `auto.py` rather than `cover.py`, no unattended mode, and active monitoring.
-  Stop on an empty question, stalled counter, reminder, or ambiguity; submit only
-  after all answers are visibly registered. Do not imply the path is verified.
+  Require an explicitly authorized attempt. Start visible local Chrome, verify CDP,
+  navigate to the Assessment Center and open the authorized attempt; ask for help
+  only when necessary. Use `auto.py` rather than `cover.py`, no unattended mode,
+  and active monitoring. Stop on an empty question, stalled counter, reminder, or
+  ambiguity; submit only after all answers are visibly registered. Do not imply the
+  path is verified.
 
 ## Prerequisites
 
