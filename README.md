@@ -143,10 +143,10 @@ Copy-paste these prompts into your agent chat:
 - **Agent Yield Mode (Auto-Patch Stalls)**:
   > `/engdis-autopilot Run course "Advanced 2" unit 5 in agent mode. If stalled (rc=6), inspect the fixture in logs/fixtures/, patch solver.py, and resume.`
 
-- **Unit lesson test (not graded)**:
-  > `/engdis-autopilot Run the unit lesson Test step for course "Advanced 2", unit 2, lesson "News". This only changes the unit completion percentage; it is not an Assessment Center exam. Docker is fine.`
+- **Assessment Center midterm/final (graded; separate from unit tests)**:
+  > `/engdis-autopilot I have my Assessment Center midterm/final open in a visible local Chrome on CDP port 9225. I explicitly authorize you to run the harness on this exam attempt. Do not use cover.py, Docker, headless mode, or --unattended. Attach to the already-open exam tab with auto.py; monitor every question and verify an answer is registered before advancing. If a question is empty, the counter stalls, a reminder appears, or the page is ambiguous, stop without submitting and tell me what happened. Submit only after every question is visibly answered, report the score shown, then stop.`
 
-The first two prompts are for routine practice/coverage; `--unattended` means a stalled item is skipped. Do **not** use that prompt or mode for an Assessment Center exam.
+`--unattended` means a stalled item is skipped. Do **not** use that mode for an Assessment Center exam.
 
 ---
 
