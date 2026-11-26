@@ -57,7 +57,7 @@ Operational procedures for AI coding agents running, diagnosing, and repairing t
 ## Quick Reference
 
 > **CRITICAL EXECUTION RULE**: Never run `python3 cover.py` directly on the host machine. Headless Chromium with fake audio stream flags runs exclusively inside Docker. Always execute via Docker:
-> - Production / Batch: `ED_COURSE="<COURSE>" ED_UNITS="<UNITS>" ED_PASSES=2 ED_UNATTENDED=1 docker compose run --rm engdis`
+> - Production / Batch: `ED_COURSE="<COURSE>" ED_UNITS="<UNITS>" ED_PASSES=2 ED_UNATTENDED=0 docker compose run --rm engdis`
 > - Development container: `docker exec engdis_inspect python3 -u cover.py <UNITS> 2 --course="<COURSE>"`
 >
 > Never guess which course or units to automate. Inspect active LMS state first or ask explicitly.
