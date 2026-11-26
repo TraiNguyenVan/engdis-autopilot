@@ -291,26 +291,7 @@ def handle_branch(t, src):
 def handle_test(t, src, unit_handler=None, lesson_name=""):
     """Answer a test question set, submit on the last one."""
     # Listening tests score 40% if answered blind; transcribe the audio once per test.
-    if "[TRANSCRIPT]" not in src:
-        # 1. Try DOM transcript first (instant, free)
-        dt = solver.dom_transcript(t)
-        if dt:
-            src = "[TRANSCRIPT]\n" + dt + "\n\n" + src
-            print(f"test dom-transcript ({len(dt)} chars)", flush=True)
-        else:
-            # 2. Fallback to audio download + ASR
-            url = t.js("""(() => {const m=[...document.querySelectorAll('audio,video')]
-            .map(x=>x.currentSrc||x.src).filter(Boolean); return m.length?m[m.length-1]:'';})()""")
-            if url:
-                key = url.rsplit('/', 1)[-1].rsplit('.', 1)[0]
-                try:
-                    tr = solver.transcript_for(url, key)
-                except Exception as e:
-                    tr = ''
-                    print("! transcript %s: %s" % (key, str(e)[:140]), flush=True)
-                if tr:
-                    src = "[TRANSCRIPT]\n" + tr + "\n\n" + src
-                    print("test transcript", key, len(tr))
+    src = solver.attach_transcript(t, src, label="test")
     out = None
     if unit_handler:
         out = unit_handler.on_task(t, {"type": "test", "src": src, "lesson": lesson_name})
@@ -803,6 +784,10 @@ def main(max_iter=120):
                   if(a.includes('Start') || document.querySelector('.openSpeech__btnStart, .openSpeech__btn, .speakingInteract')) return 'speak';
                   return 'other';
                 })()""")
+                d = solver.source_text(t) or {}
+                src = (d.get("resource") or "") + "\n" + (d.get("body") or "")
+                if kind != "speak":
+                    src = solver.attach_transcript(t, src)
                 custom_out = None
                 if unit_handler:
                     custom_out = unit_handler.on_task(t, {"type": kind, "src": src, "lesson": s.get("lesson", ""), "step": s.get("step", ""), "counter": s.get("counter")})

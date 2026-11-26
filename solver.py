@@ -184,6 +184,28 @@ def dom_transcript(t):
     })()""")
 
 
+def attach_transcript(t, src, label="--"):
+    """Attach audio/video transcript from DOM or media ASR if not already in src."""
+    if "transcript" in (src or "").lower():
+        return src
+    dt = dom_transcript(t)
+    if dt:
+        print(f"{label} dom-transcript ({len(dt)} chars)", flush=True)
+        return (src or "") + "\n\nAUDIO TRANSCRIPT:\n" + dt
+    u = media_url(t)
+    if u:
+        key = u.rsplit("/", 1)[-1].split("?")[0]
+        try:
+            tr = transcript_for(u, key)
+        except Exception as e:
+            tr = ""
+            print(f"! transcript {key}: {str(e)[:140]}", flush=True)
+        if tr:
+            print(f"{label} transcript {key} ({len(tr)} chars)", flush=True)
+            return (src or "") + "\n\nAUDIO TRANSCRIPT:\n" + tr
+    return src
+
+
 def play_media(t, timeout=45, quick=False):
     """Click play button and accelerate playback at 16x speed to complete and trigger server beacon."""
     present = t.js("""(() => [...document.querySelectorAll('audio,video')].filter(x=>(x.currentSrc||x.src)).length)()""")
@@ -1128,19 +1150,7 @@ def main(max_tasks=200):
             continue
 
         # audio/video comprehension task: make sure we have a transcript
-        if "transcript" not in src.lower():
-            dt = dom_transcript(t)
-            if dt:
-                src += "\n\nAUDIO TRANSCRIPT:\n" + dt
-                print(f"-- dom-transcript ({len(dt)} chars)")
-            else:
-                u = media_url(t)
-                if u:
-                    key = u.rsplit("/", 1)[-1].split("?")[0]
-                    tr = transcript_for(u, key)
-                    if tr:
-                        src += "\n\nAUDIO TRANSCRIPT:\n" + tr
-                        print(f"-- transcript {key} ({len(tr)} chars)")
+        src = attach_transcript(t, src)
 
         if stuck >= 3:
             # try switching step, then give up
