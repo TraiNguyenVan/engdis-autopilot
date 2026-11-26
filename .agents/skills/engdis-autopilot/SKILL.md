@@ -21,6 +21,27 @@ Operational procedures for AI coding agents running, diagnosing, and repairing t
 - Inspecting auto-dumped task fixtures (`logs/fixtures/stuck_*.json`).
 - Running tests before committing engine patches.
 
+## Run modes: routine course work vs Assessment Center exams
+
+- Course lessons, practice and **unit lesson tests are ungraded**; their outcomes
+  only affect unit completion percentage. Docker/headless is fine for these runs.
+- **Graded midterms/finals live in the Assessment Center**, outside the unit/lesson
+  tree. Never call a unit lesson test a graded exam.
+- `cover.py` cannot open an Assessment Center exam because it navigates the course
+  tree. If the task is authorized, the user opens the exam manually; `auto.py` may
+  operate on the already-open tab because the question widgets are shared. This
+  candidate procedure is unverified here: no Assessment Center fixture or live-run
+  evidence. Do not imply it is proven safe; require explicit authorization before
+  any live graded submission.
+- When asked to write an Assessment Center prompt, put it in the repo
+  `README.md` under `## Running with AI Agents`, distinct from the ungraded lesson
+  test prompt. Keep it non-answering: user opens the exam in visible local Chrome;
+  the agent may confirm browser/login/connection and help with technical issues, but
+  must not answer exam questions, select answers, advance through questions, or
+  submit. No `cover.py`, Docker, headless or unattended mode. The user controls the
+  assessment and submits it themselves. Keep private score anecdotes and percentages
+  out of the public README and PR text.
+
 ## Prerequisites
 
 - **Dual Course Guarantee (Advanced 2 & 3)**: All automation logic, selectors, and solvers must work across both Advanced 2 and Advanced 3 curricula without regression. Never remove existing widget handlers.

@@ -7,83 +7,28 @@ Automated browser testing and exercise solver harness for English Discoveries co
 | You want to | Run | Why |
 | :--- | :--- | :--- |
 | Lessons and practice, including **unit lesson tests** (not graded) | **Docker** (`docker compose run engdis`) or local | Headless is fine; lesson-test outcomes only affect unit completion percentage |
-| A **graded exam** — Assessment Center midterm/final | **Local visible browser**, exam opened by you, then `auto.py` on that page | `cover.py` cannot open it; monitor the DOM loop while the exam is active |
+| A **graded exam** — Assessment Center midterm/final | **Local visible browser**, opened and controlled by you | Do not automate answers or submission |
 
-The graded path is [Graded exams](#graded-exams-assessment-center-midterms-and-finals);
-everything else starts at [Quickstart](#quickstart).
+If you have an Assessment Center exam, follow the **Assessment Center exam instructions immediately below**. Unit lesson tests are ungraded; Docker/automation is for practice and coverage only.
+
+## Assessment Center exams: midterms and finals
+
+The courseware's scored assessment is the **Assessment Center exam** (midterm, final, placement). **Unit lesson tests are not graded** — they only move a unit's completion percentage.
+
+### Assessment Center prompt
+
+Use this prompt for technical assistance only. The agent must not interact with exam content:
+
+> `/engdis-autopilot I have an Assessment Center midterm/final open in visible local Chrome. Do not use cover.py, auto.py, Docker, headless mode, or unattended mode. Do not read or answer exam questions, select answers, advance through questions, or submit. You may only confirm the browser/login/connection is working and help with technical issues without interacting with assessment content. I will take and submit the exam myself.`
+
+### Assessment Center boundaries
+
+- The Assessment Center is separate from the unit/lesson tree. `cover.py` cannot open it.
+- This repo has no Assessment Center fixture or verified run. Unit lesson tests passing says nothing about Assessment Center behavior.
+- Keep the browser visible. The user operates the exam and submits it themselves; the agent may only assist with browser/login/connection issues without viewing or manipulating exam content.
+- Do not include private score anecdotes or percentages in the public README or PR text.
 
 ---
-
-## Graded exams: Assessment Center midterms and finals
-
-The courseware's scored assessment is the **Assessment Center exam**
-(midterm, final, placement). **Unit lesson tests are not graded** — they only move a
-unit's completion percentage — and are covered
-[further down](#unit-lesson-tests-not-graded).
-
-### What works, and what does not
-
-- **`cover.py` cannot open an exam.** Its navigation walks
-  `.home__unitW` → `learningArea` → lesson; an Assessment Center exam is not a unit
-  lesson, so there is nothing to target.
-- **Once the exam is open, the widgets are the usual ones.** Questions render through
-  the practice manager (`.prMCQ__qaSet`, the test pager,
-  `.learning__submitTestLink`), which is why `auto.py` applies: it classifies tasks by
-  DOM, not by lesson name.
-- **This path is unverified in this repo.** The handoff report is not evidence of
-  this branch's behavior; the test suite has no Assessment Center fixture.
-
-### Procedure
-
-**1. Start a visible browser** so you can monitor the question and score screens:
-
-```bash
-python3 bootstrap_browser.py --headed --profile ~/.ed-profile
-```
-
-If the exam has a speaking item, launch Chrome yourself instead: the bootstrap flags
-include `--use-fake-device-for-media-stream` and a graded speaking answer can be
-rejected.
-
-```bash
-"$CHROME_BIN" --remote-debugging-port=9225 --user-data-dir=~/.ed-profile \
-  --no-sandbox --window-size=1400,1000 about:blank
-```
-
-**2. Confirm the session:**
-
-```bash
-python3 -c "import edlib, login; t = edlib.tab(); print(login.ensure_login(t), t.url)"
-```
-
-**3. Open the exam yourself** in that window and get to the first question. Do not
-ask `cover.py` to find it.
-
-**4. Run the loop against the open page, with the window in front of you:**
-
-```bash
-python3 auto.py 400        # max iterations; stop with Ctrl-C or the STOP file
-python3 status.py          # lesson|step|task|total|flags, one line per check
-```
-
-**5. Watch for these and stop the run if you see them:**
-
-- **Counter stuck** (`1 / 12` staying at `1`) with an empty question area → the item
-  never loaded. Stop; do not submit.
-- **A reminder/modal** — read it; it names what is still missing.
-- **Score screen** — the submit fires on the last question. Read the score before the
-  loop moves on.
-
-**6. Stop cleanly:**
-
-```bash
-touch STOP
-python3 tools/spikes/killpy.py auto.py
-```
-
-The score is already saved server-side. **A second submission replaces it — there is
-no undo**, so never re-run an exam "to fix" a score, and never use `--force`.
-
 ## Unit lesson tests (not graded)
 
 Lesson tests only feed the unit's completion percentage. Headless Docker is fine for
@@ -143,8 +88,8 @@ Copy-paste these prompts into your agent chat:
 - **Agent Yield Mode (Auto-Patch Stalls)**:
   > `/engdis-autopilot Run course "Advanced 2" unit 5 in agent mode. If stalled (rc=6), inspect the fixture in logs/fixtures/, patch solver.py, and resume.`
 
-- **Assessment Center midterm/final (graded; separate from unit tests)**:
-  > `/engdis-autopilot I have my Assessment Center midterm/final open in a visible local Chrome on CDP port 9225. I explicitly authorize you to run the harness on this exam attempt. Do not use cover.py, Docker, headless mode, or --unattended. Attach to the already-open exam tab with auto.py; monitor every question and verify an answer is registered before advancing. If a question is empty, the counter stalls, a reminder appears, or the page is ambiguous, stop without submitting and tell me what happened. Submit only after every question is visibly answered, report the score shown, then stop.`
+- **Unit lesson test (not graded)**:
+  > `/engdis-autopilot Run the unit lesson Test step for course "Advanced 2", unit 2, lesson "News". This only changes the unit completion percentage; it is not an Assessment Center exam. Docker is fine.`
 
 `--unattended` means a stalled item is skipped. Do **not** use that mode for an Assessment Center exam.
 
