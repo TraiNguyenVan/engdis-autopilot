@@ -841,47 +841,346 @@ def solve_errorfix(t, src=""):
             f"done={state.get('done')}")
 
 
+_DDL_PLACEHOLDERS = {
+    "", "select", "select...", "select an option",
+    "choose", "choose...", "choose an option", "---", "--",
+}
+
+
+def _norm_ddl(text, strip_punct=False):
+    s = str(text or "")
+    for a, b in (("\u2019", "'"), ("\u2018", "'"), ("\u201c", '"'), ("\u201d", '"'),
+                 ("\u2013", "-"), ("\u2014", "-"), ("\u00a0", " ")):
+        s = s.replace(a, b)
+    if strip_punct:
+        s = "".join(ch if ch.isalnum() else " " for ch in s)
+    return " ".join(s.split()).lower()
+
+
+def _strip_ddl_prefix(text):
+    s = str(text or "").strip().strip('"\'`')
+    if s.startswith(("- ", "\u2022 ", "* ")):
+        return s[2:].strip().strip('"\'`')
+    i = 1 if s.startswith("(") else 0
+    j = i
+    while j < len(s) and s[j].isdigit():
+        j += 1
+    if j > i and j < len(s) and s[j] in ".)_:-" and s[j + 1:j + 2].isspace():
+        return s[j + 2:].strip().strip('"\'`')
+    return s
+
+
+def _match_ddl_option(want, options):
+    raw_want = str(want or "").strip()
+    if not raw_want or not options:
+        return None
+    valid = [
+        (idx, str(opt or "").strip())
+        for idx, opt in enumerate(options)
+        if _norm_ddl(opt) not in _DDL_PLACEHOLDERS
+    ]
+    if not valid:
+        return None
+
+    for candidate in dict.fromkeys((raw_want, _strip_ddl_prefix(raw_want))):
+        if not candidate:
+            continue
+        for idx, opt in valid:
+            if opt == candidate:
+                return idx
+        w_norm = _norm_ddl(candidate)
+        if w_norm:
+            for idx, opt in valid:
+                if _norm_ddl(opt) == w_norm:
+                    return idx
+        w_alnum = _norm_ddl(candidate, strip_punct=True)
+        if w_alnum:
+            for idx, opt in valid:
+                if _norm_ddl(opt, strip_punct=True) == w_alnum:
+                    return idx
+
+    for strip_p in (False, True):
+        w = _norm_ddl(_strip_ddl_prefix(raw_want), strip_punct=strip_p)
+        if not w:
+            continue
+        scored = []
+        for idx, opt in valid:
+            o = _norm_ddl(opt, strip_punct=strip_p)
+            if not o:
+                continue
+            padded_o, padded_w = f" {o} ", f" {w} "
+            if padded_w in padded_o:
+                scored.append((4, len(w), -len(o), -idx, idx))
+            elif padded_o in padded_w:
+                scored.append((3, len(o), 0, -idx, idx))
+            elif len(w) >= 2 and w in o:
+                scored.append((2, len(w), -len(o), -idx, idx))
+            elif len(o) >= 2 and o in w:
+                scored.append((1, len(o), 0, -idx, idx))
+        if scored:
+            return max(scored)[-1]
+    return None
+
+
+def _ddl_selected_ok(selected_text, target_text):
+    if _norm_ddl(selected_text) in _DDL_PLACEHOLDERS:
+        return False
+    return _match_ddl_option(target_text, [selected_text]) == 0
+
+
+_FITB_DOM_JS = r"""
+  const CONTAINER_SEL = '.DDLOptionsW, .prFITB__DDLOptionsW, .prDDL__DDLOptionsW, .prFITB__qaItem, .prDDL__qaItem, .fitb-ddl';
+  const OPT_SEL = '.DDLOptions__listItem, .DDLOptions__list li, .DDLOptions__option';
+  const isVisible = (el) => {
+    if (!el) return false;
+    const hasLayout = !!(typeof document !== 'undefined' && document.body && document.body.getBoundingClientRect &&
+      (document.body.getBoundingClientRect().width > 0 || document.body.getBoundingClientRect().height > 0));
+    let cur = el;
+    while (cur && cur.nodeType === 1) {
+      if (cur.hidden || (cur.hasAttribute && cur.hasAttribute('hidden'))) return false;
+      const cls = cur.classList;
+      if (cls && (cls.contains('hide') || cls.contains('ng-hide') || cls.contains('hidden') || cls.contains('DDLOptions__list--closed'))) return false;
+      const st = (typeof window !== 'undefined' && window.getComputedStyle) ? window.getComputedStyle(cur) : cur.style;
+      if (st && (st.display === 'none' || st.visibility === 'hidden' || st.opacity === '0')) return false;
+      if (hasLayout && st && st.overflow === 'hidden' && cur.getBoundingClientRect) {
+        const cr = cur.getBoundingClientRect();
+        if (cr.width === 0 || cr.height === 0) return false;
+      }
+      cur = cur.parentElement;
+    }
+    if (hasLayout && el.getBoundingClientRect) {
+      const r = el.getBoundingClientRect();
+      if (r.width === 0 || r.height === 0) return false;
+    }
+    return true;
+  };
+  const getTrigger = (idx) => {
+    const root = document.querySelector('.learning__angPracticeW, ed-la-practicearea, #pmContainer') || document;
+    const sels = [...root.querySelectorAll('.DDLOptions__selected')];
+    if (sels[idx]) return sels[idx];
+    const allSels = [...document.querySelectorAll('.DDLOptions__selected')];
+    if (allSels[idx]) return allSels[idx];
+    const wraps = [...document.querySelectorAll(CONTAINER_SEL)];
+    return (wraps[idx] && wraps[idx].querySelector('.DDLOptions__selected')) || null;
+  };
+  const getContainers = (s) => {
+    const out = [];
+    let cur = s ? s.parentElement : null;
+    while (cur && cur !== document.body && cur !== document.documentElement) {
+      if (cur.matches && cur.matches(CONTAINER_SEL) && cur.querySelectorAll('.DDLOptions__selected').length <= 1) {
+        out.push(cur);
+      }
+      cur = cur.parentElement;
+    }
+    return out;
+  };
+  const dedupOptions = (nodes) => {
+    const arr = [...nodes];
+    return arr.filter(el => !arr.some(other => other !== el && el.contains && el.contains(other)));
+  };
+  const getScopedOptions = (s) => {
+    const containers = getContainers(s);
+    for (const c of containers) {
+      const raw = dedupOptions(c.querySelectorAll(OPT_SEL));
+      if (!raw.length) continue;
+      const vis = raw.filter(isVisible);
+      if (vis.length) return {items: vis, scope: 'container'};
+    }
+    const docVis = dedupOptions(document.querySelectorAll(OPT_SEL)).filter(el => {
+      if (!isVisible(el)) return false;
+      let anc = el.parentElement;
+      while (anc && anc !== document.body && anc !== document.documentElement) {
+        if (anc.matches && anc.matches(CONTAINER_SEL)) {
+          const ownerSels = anc.querySelectorAll('.DDLOptions__selected');
+          if (ownerSels.length === 1 && ownerSels[0] !== s) return false;
+        }
+        anc = anc.parentElement;
+      }
+      return true;
+    });
+    if (docVis.length) return {items: docVis, scope: 'document'};
+    for (const c of containers) {
+      const raw = dedupOptions(c.querySelectorAll(OPT_SEL));
+      if (raw.length) return {items: raw, scope: 'container-hidden'};
+    }
+    return {items: [], scope: 'none'};
+  };
+  const getSelectedText = (s) => {
+    if (!s) return '';
+    if (s.cloneNode) {
+      const clone = s.cloneNode(true);
+      if (clone.querySelectorAll) {
+        clone.querySelectorAll(OPT_SEL + ', .DDLOptions__list').forEach(e => e.remove());
+      }
+      return ((clone.innerText || clone.textContent) || '').replace(/\s+/g, ' ').trim();
+    }
+    return ((s.innerText || s.textContent) || '').replace(/\s+/g, ' ').trim();
+  };
+  const getOptText = (el) => ((el && (el.innerText || el.textContent)) || '').replace(/\s+/g, ' ').trim();
+  const fireMouse = (el) => {
+    if (!el || typeof el.dispatchEvent !== 'function') return;
+    for (const type of ['mousedown', 'mouseup']) {
+      try {
+        const ev = typeof MouseEvent === 'function'
+          ? new MouseEvent(type, {bubbles: true, cancelable: true})
+          : {type: type, bubbles: true};
+        el.dispatchEvent(ev);
+      } catch (e) {}
+    }
+  };
+  const closeOtherMenus = (s, forceClose) => {
+    const others = [...document.querySelectorAll('.DDLOptions__selected')].filter(x => x !== s);
+    const hasOpenOther = forceClose || others.some(o =>
+      getContainers(o).some(c => dedupOptions(c.querySelectorAll(OPT_SEL)).some(isVisible))
+    );
+    if (!hasOpenOther) return;
+    if (document.body && typeof document.body.click === 'function') {
+      try { document.body.click(); } catch (e) {}
+    }
+    for (const o of others) {
+      const stillOpen = getContainers(o).some(c => dedupOptions(c.querySelectorAll(OPT_SEL)).some(isVisible));
+      if (stillOpen && typeof o.click === 'function') {
+        try { o.click(); } catch (e) {}
+      }
+    }
+  };
+"""
+
+
 def solve_fitb(t, src=""):
     """Sentence with numbered blanks, each a dropdown of options."""
-    data = jso(t, """
-      const el=document.querySelector('.learning__angPracticeW ng-component');
-      if(!el) return null; const c=ng.probe(el).componentInstance;
-      const q=(c.practiceData&&c.practiceData.questions&&c.practiceData.questions[0]);
-      if(!q) return null;
-      return {text:q.text, lists:(q.answerLists||[]).map(l=>(l.answers||[]).map(a=>a.txt))};
+    data = jso(t, r"""
+      const el = document.querySelector('.learning__angPracticeW ng-component, ed-la-practicearea ng-component');
+      if (!el || typeof ng === 'undefined' || !ng || !ng.probe) return null;
+      const probe = ng.probe(el);
+      const c = probe && probe.componentInstance;
+      const qs = c && c.practiceData && c.practiceData.questions;
+      if (!qs || !qs.length) return null;
+      const arr = [...qs];
+      const text = arr.length === 1
+        ? (arr[0].text || '')
+        : arr.map(q => (q && q.text) || '').filter(Boolean).join('\n');
+      const lists = arr.flatMap(q => ((q && q.answerLists) || []).map(l => ((l && l.answers) || []).map(a => a.txt)));
+      return {text: text, lists: lists};
     """)
-    if not data:
+    if not data or not data.get("lists"):
         return "fitb: nodata"
-    lines = "\n".join(f"{i+1}. {o}" for i, o in
-                      [(i, " | ".join(opts)) for i, opts in enumerate(data["lists"])])
-    prompt = ("Sentence with blanks (numbered):\n" + data["text"] +
+    lines = "\n".join(f"{i+1}. {' | '.join(opts)}" for i, opts in enumerate(data["lists"]))
+    ctx = f"SOURCE MATERIAL:\n{src}\n\n" if src and str(src).strip() else ""
+    prompt = (ctx + "Sentence with blanks (numbered):\n" + data["text"] +
               "\n\nOptions per blank:\n" + lines +
               '\n\nPick the best option for each blank. Reply ONLY JSON:'
               ' {"1": "<exact option text>", "2": "..."}')
-    picks = ask_json(prompt, max_tokens=300) or {}
+    picks = ask_json(prompt, max_tokens=600) or {}
     out = []
     for i, opts in enumerate(data["lists"]):
         want = picks.get(str(i + 1)) or picks.get(i + 1) or ""
-        if not want:
+        if not str(want).strip():
             out.append(f"{i}=?")
             continue
-        sel = jso(t, f"""
-          const w=document.querySelectorAll('.prFITB__DDLOptionsW')[{i}];
-          if(!w) return 0; const s=w.querySelector('.DDLOptions__selected');
-          if(s) s.click(); return 1;
-        """)
-        time.sleep(0.4)
-        st = jso(t, f"""
-          const w=document.querySelectorAll('.prFITB__DDLOptionsW')[{i}];
-          if(!w) return 'nf'; const W={json.dumps(str(want).lower())};
-          const items=[...w.querySelectorAll('.DDLOptions__listItem')];
-          const pick=items.find(x=>(x.innerText||'').trim()=== {json.dumps(str(want))})
-            || items.find(x=>(x.innerText||'').trim().toLowerCase()===W)
-            || items.find(x=>(x.innerText||'').toLowerCase().includes(W))
-            || items.find(x=>W.includes((x.innerText||'').trim().toLowerCase()));
-          if(!pick) return 'noopt'; pick.click(); return 'ok';
-        """)
-        time.sleep(0.3)
+        st = "noopt"
+        force_close = False
+        for attempt in range(3):
+            open_res = jso(t, _FITB_DOM_JS + f"""
+              const s = getTrigger({i});
+              if (!s) return {{status: 'nf'}};
+              closeOtherMenus(s, {'true' if force_close else 'false'});
+              if (typeof s.scrollIntoView === 'function') {{
+                s.scrollIntoView({{block: 'center', inline: 'nearest'}});
+              }}
+              const cur = getScopedOptions(s);
+              if ({attempt} === 0 || {'true' if force_close else 'false'} || cur.scope === 'none' || cur.scope === 'container-hidden') {{
+                if ({attempt} > 0) fireMouse(s);
+                s.click();
+              }}
+              return {{status: 'ok', selected: getSelectedText(s)}};
+            """) or {}
+            force_close = False
+            if open_res.get("status") == "nf":
+                st = "nf"
+                break
+            time.sleep(0.3)
+            opts_res = jso(t, _FITB_DOM_JS + f"""
+              const s = getTrigger({i});
+              if (!s) return {{status: 'nf', options: [], scope: 'none', selected: ''}};
+              const res = getScopedOptions(s);
+              return {{
+                status: 'ok',
+                scope: res.scope,
+                selected: getSelectedText(s),
+                options: res.items.map(getOptText)
+              }};
+            """) or {}
+            if opts_res.get("status") == "nf":
+                st = "nf"
+                break
+            dom_opts = opts_res.get("options") or []
+            scope = opts_res.get("scope") or "none"
+            if scope == "document" and opts:
+                exp_norms = {_norm_ddl(o, strip_punct=True) for o in opts if _norm_ddl(o, strip_punct=True)}
+                dom_norms = {_norm_ddl(o, strip_punct=True) for o in dom_opts if _norm_ddl(o, strip_punct=True)}
+                if exp_norms and dom_norms and not (exp_norms & dom_norms):
+                    force_close = True
+                    st = "noopt"
+                    continue
+            match_idx = _match_ddl_option(want, dom_opts)
+            if match_idx is None:
+                force_close = True
+                st = "noopt"
+                continue
+            chosen_text = dom_opts[match_idx]
+            pick_res = jso(t, _FITB_DOM_JS + f"""
+              const s = getTrigger({i});
+              if (!s) return {{clicked: 0, selected: ''}};
+              const res = getScopedOptions(s);
+              const wantText = {json.dumps(chosen_text)};
+              let pick = res.items[{match_idx}];
+              if (!pick || getOptText(pick) !== wantText) {{
+                pick = res.items.find(el => getOptText(el) === wantText) || pick;
+              }}
+              if (!pick) return {{clicked: 0, selected: getSelectedText(s)}};
+              if (typeof pick.scrollIntoView === 'function') {{
+                pick.scrollIntoView({{block: 'nearest', inline: 'nearest'}});
+              }}
+              if ({attempt} > 0) fireMouse(pick);
+              pick.click();
+              let selAfter = getSelectedText(s);
+              if ({attempt} > 0 && !selAfter && pick.querySelector) {{
+                const child = pick.querySelector('a, span, div, button');
+                if (child && typeof child.click === 'function') {{
+                  fireMouse(child);
+                  child.click();
+                  selAfter = getSelectedText(s);
+                }}
+              }}
+              let rect = null;
+              if (pick.getBoundingClientRect) {{
+                const r = pick.getBoundingClientRect();
+                if (r.width > 0 && r.height > 0) {{
+                  rect = {{cx: Math.round(r.x + r.width / 2), cy: Math.round(r.y + r.height / 2), w: r.width, h: r.height}};
+                }}
+              }}
+              return {{clicked: 1, selected: selAfter, rect: rect}};
+            """) or {}
+            time.sleep(0.25)
+            if not pick_res.get("clicked"):
+                force_close = True
+                st = "noopt"
+                continue
+            sel_after = pick_res.get("selected") or ""
+            if not _ddl_selected_ok(sel_after, chosen_text):
+                sel_after = jso(t, _FITB_DOM_JS + f"const s = getTrigger({i}); return getSelectedText(s);") or ""
+            if not _ddl_selected_ok(sel_after, chosen_text) and attempt > 0:
+                rect = pick_res.get("rect")
+                if isinstance(rect, dict) and rect.get("w", 0) > 0 and callable(getattr(t, "click_xy", None)):
+                    t.click_xy(rect["cx"], rect["cy"])
+                    time.sleep(0.2)
+                    sel_after = jso(t, _FITB_DOM_JS + f"const s = getTrigger({i}); return getSelectedText(s);") or ""
+            if _ddl_selected_ok(sel_after, chosen_text):
+                st = "ok"
+                break
+            st = "empty"
+            force_close = True
         out.append(f"{i}={st}")
     return "fitb: " + " ".join(out)
 
