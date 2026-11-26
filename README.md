@@ -8,6 +8,32 @@ Automated browser testing and exercise solver harness for English Discoveries co
 
 ## Quickstart
 
+> ### ⚠️ Graded tests and exams: run locally with a visible browser, not Docker
+>
+> The Docker harness runs Chromium **headless** (`--headless=new`) with a fake
+> media device. Nothing is rendered where you can see it, so on a screen that
+> actually counts you cannot tell whether the test loaded, whether a question
+> rendered empty, whether a reminder modal is blocking the page, or whether the
+> score screen that came back is the one you wanted.
+>
+> That blind mode is not harmless: a headless run of the Advanced 2 midterm test
+> submitted **48%** because the harness walked the test unanswered on an empty
+> practice area, and a re-submission **replaces** the score already recorded for
+> that attempt — there is no undo.
+>
+> So for any test that counts:
+>
+> - Run on your own machine with a **headed** browser you can watch, launched with
+>   `--remote-debugging-port=9225` (no `--headless`, no `docker compose run`).
+> - Keep the window visible for the whole test step and watch the question
+>   counter move. If it stalls on an empty question, stop and fix it instead of
+>   submitting.
+> - Check the score on screen before advancing to the next lesson; do not retake a
+>   test whose score is already recorded unless you intend to replace it.
+>
+> Docker remains the right tool for unattended practice/coverage runs on lessons
+> whose scores you do not mind re-recording.
+
 ### 1. Setup
 ```bash
 cp .env.example .env

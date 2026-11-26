@@ -48,10 +48,26 @@ def wait_for_cdp(port: int, timeout: float = 15.0) -> bool:
             time.sleep(0.2)
     return False
 
+
+def _default_profile() -> str:
+    """Chrome profile directory: container mount first, then the checkout.
+
+    Docker mounts the profile volume at /data/profile (the entrypoint also
+    passes --profile explicitly); a bare-metal run has no /data, so it uses
+    <repo>/data/profile instead of failing to create a root-level directory.
+    """
+    env = os.environ.get("ED_PROFILE")
+    if env:
+        return env
+    if os.path.isdir("/data"):
+        return "/data/profile"
+    return os.path.join(os.path.dirname(os.path.abspath(__file__)), "data", "profile")
+
+
 def main():
     parser = argparse.ArgumentParser(description="Bootstrap headless Chromium with CDP")
     parser.add_argument("--port", type=int, default=config.CDP_PORT)
-    parser.add_argument("--profile", default="/data/profile")
+    parser.add_argument("--profile", default=_default_profile())
     parser.add_argument("--timeout", type=float, default=15.0)
     args = parser.parse_args()
 

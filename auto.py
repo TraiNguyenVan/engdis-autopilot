@@ -25,13 +25,14 @@ IS_TEST_JS = """(() => {
     const ddComp = dds.length > 1 ? ng.probe(dds[1])?.componentInstance : null;
     const node = ddComp?.dropDownListObj?.SelectedNode || nav?._stepsList?.SelectedNode;
     const name = String(node?.Name || '').trim().toLowerCase();
-    if (name === 'practice') return false;
+    if (name === 'practice' || name === 'explore') return false;
     if (name === 'test' || name === 'review') return true;
     if (app?.isTestEnv) return true;
     if (typeof app?.isStepTest === 'function' && app.isStepTest()) return true;
     const sub = document.querySelector('.learning__submitTestLink');
     if (sub && (sub.offsetWidth || sub.offsetHeight)) return true;
     const stepTitle = dds.length > 1 ? (dds[1].innerText || '').toLowerCase() : '';
+    if (/explore|practice/.test(stepTitle)) return false;
     return /test|review/.test(stepTitle);
 })()"""
 
@@ -59,15 +60,40 @@ def st(t):
             const intro = document.querySelector('.learning__taskNavPagerCounterIW--intro');
             if (intro && intro.innerText.trim()) return intro.innerText.trim();
             const m = (document.querySelector('#pmContainer')?.innerText || '').match(/Question\\s+(\\d+)\\s+of\\s+(\\d+)/i);
-            return m ? m[1] : null;
+            if (m) return m[1];
+            const p = document.querySelector('ed-la-taskspager');
+            const pComp = window.ng?.probe?.(p?.parentElement)?.componentInstance;
+            if (pComp && pComp.tasksNodes && Array.isArray(pComp.tasksNodes.Children)) {
+                const curId = pComp.tasksNodes.SelectedNode?.NodeId;
+                const curIdx = pComp.tasksNodes.Children.findIndex(c => c.NodeId === curId);
+                if (curIdx > 0) return String(curIdx);
+                if (curIdx === 0) return 'Intro';
+            }
+            const app = window.ng?.probe?.(document.querySelector('app'))?.componentInstance;
+            const tList = app?.navigationService?._tasksList;
+            if (tList && typeof tList.SelectedIndex === 'number' && tList.SelectedIndex >= 0) {
+                return String(tList.SelectedIndex + 1);
+            }
+            return null;
         })()"""),
         "total": t.js("""(() => {
             const c = document.querySelector('.learning__taskNavPCTotalTasks');
             if (c && c.innerText.trim()) return c.innerText.trim();
             const m = (document.querySelector('#pmContainer')?.innerText || '').match(/Question\\s+(\\d+)\\s+of\\s+(\\d+)/i);
-            return m ? m[2] : null;
+            if (m) return m[2];
+            const p = document.querySelector('ed-la-taskspager');
+            const pComp = window.ng?.probe?.(p?.parentElement)?.componentInstance;
+            if (pComp && pComp.tasksNodes && Array.isArray(pComp.tasksNodes.Children) && pComp.tasksNodes.Children.length > 1) {
+                return String(pComp.tasksNodes.Children.length - 1);
+            }
+            const app = window.ng?.probe?.(document.querySelector('app'))?.componentInstance;
+            const tList = app?.navigationService?._tasksList;
+            if (tList && Array.isArray(tList.Children) && tList.Children.length) {
+                return String(tList.Children.length);
+            }
+            return null;
         })()"""),
-        "body": t.js("(() => (document.body?.innerText || '').slice(0,600))()"),
+        "body": t.js("(() => (document.body?.innerText || ''))()"),
         "unit": t.js("""(() => {const m = (document.body?.innerText||'').match(/Unit\\s+\\d+/i); return m ? m[0].replace(/\\s+/, ' ') : '';})()"""),
     }
 
@@ -106,40 +132,75 @@ def advance(t, tries=3):
           const tIdx=app?.navigationService?._tasksList?.SelectedIndex;
           const d=document.querySelectorAll('ed-la-dropdownlist')[1];
           const dt=d?(d.innerText||'').trim().slice(0,14):'-';
-          return (e?e.innerText.trim():(intro||qn||'-'))+'|'+(sIdx!==undefined?sIdx:dt)+'|'+(tIdx!==undefined?tIdx:'-');""")
+          const p=document.querySelector('ed-la-taskspager');
+          const pComp=window.ng?.probe?.(p?.parentElement)?.componentInstance;
+          const pId=pComp?.tasksNodes?.SelectedNode?.NodeId;
+          return (e?e.innerText.trim():(intro||qn||'-'))+'|'+(sIdx!==undefined?sIdx:dt)+'|'+(tIdx!==undefined?tIdx:'-')+'|'+(pId||'-');""")
     before = cur()
     for _ in range(tries):
         purge_modals(t)
-        if not click(t, ".learning__taskNext"):
-            if not click(t, ".learning__nextItemLink"):
-                click(t, ".learning__taskNavPagerBtn--next")
-        now = poll.wait_until(cur, lambda v: v != before, timeout=2.5,
-                              interval=0.2, settle=0.2)
-        if now != before:
-            return True
-        # Angular navigation service fallback
+        # 1. Native Angular navigation service (fastest, most reliable)
         t.js("""(() => {
-            const nextEl = document.querySelector('.learning__taskNext, .learning__nextItem');
-            const comp = nextEl ? window.ng?.probe?.(nextEl)?.componentInstance : null;
-            if (comp && typeof comp.onNextItemClick === 'function') {
-                try {
-                    comp.isNextDisabled = false;
-                    comp.onNextItemClick({preventDefault:()=>{}});
-                    return 1;
-                } catch(e) {}
-            }
             const app = window.ng?.probe?.(document.querySelector('app'))?.componentInstance;
-            const bn = app?.navigationService?.backNextService;
-            if (bn && typeof bn.onNextClicked === 'function') {
-                try { bn.onNextClicked(); return 1; } catch(e) {}
+            const nav = app?.navigationService;
+            if (typeof nav?.tryGoPrevNext === 'function') {
+                try { nav.tryGoPrevNext(1); return 1; } catch(e) {}
             }
             return 0;
         })()""")
-        now = poll.wait_until(cur, lambda v: v != before, timeout=3.5,
-                              interval=0.2, settle=0.2)
+        now = poll.wait_until(cur, lambda v: v != before, timeout=2.0,
+                              interval=0.15, settle=0.1)
+        if now != before:
+            return True
+
+        # 2. Direct taskspager advance fallback for tests
+        t.js("""(() => {
+            const p = document.querySelector('ed-la-taskspager');
+            const comp = window.ng?.probe?.(p?.parentElement)?.componentInstance;
+            if (comp && comp.tasksNodes && Array.isArray(comp.tasksNodes.Children)) {
+                const curId = comp.tasksNodes.SelectedNode?.NodeId;
+                const curIdx = comp.tasksNodes.Children.findIndex(c => c.NodeId === curId);
+                if (curIdx >= 0 && curIdx < comp.tasksNodes.Children.length - 1) {
+                    const nextNode = comp.tasksNodes.Children[curIdx + 1];
+                    try {
+                        comp.change.emit({
+                            nodeId: nextNode.NodeId,
+                            courseNodeType: 5,
+                            selectedIndex: curIdx + 1
+                        });
+                        return 1;
+                    } catch(e) {}
+                }
+            }
+            return 0;
+        })()""")
+        now = poll.wait_until(cur, lambda v: v != before, timeout=2.0,
+                              interval=0.15, settle=0.1)
+        if now != before:
+            return True
+
+        # 3. Standard button clicks
+        if not click(t, "#learning__nextItem a, .learning__nextItemLink, .learning__taskNext a, .tasksBtnext, a.tasksBtnext"):
+            if not click(t, ".learning__taskNext"):
+                click(t, ".learning__taskNavPagerBtn--next")
+        now = poll.wait_until(cur, lambda v: v != before, timeout=2.0,
+                              interval=0.15, settle=0.1)
         if now != before:
             return True
     return False
+
+
+def next_intro_attempt(tries, key, limit=3):
+    """Count a test-intro start attempt; False once `limit` attempts are spent.
+
+    The test-intro shortcut resets `prev` on every pass, which keeps the stall
+    detector from firing. Without a bound a test that never leaves its intro
+    node loops until the per-lesson timeout, so the caller falls through to
+    normal screen handling after `limit` tries.
+    """
+    tries[key] = tries.get(key, 0) + 1
+    return tries[key] <= limit
+
 
 def wait_text(t, needles, timeout=25):
     t0 = time.time()
@@ -168,8 +229,20 @@ def handle_speaking(t, src):
     if q(t, "return document.querySelectorAll('a.chooseCaracterArrow').length;"):
         t.js("(() => {const a=document.querySelectorAll('a.chooseCaracterArrow'); if(a.length) a[0].click(); return 1;})()")
         time.sleep(2)
+
+    # Send-to-teacher is a real UI completion signal, not a progress forgery:
+    # click the button and let the LMS record the submission itself.
+    sent = t.js("""(() => {
+      const b = document.querySelector('.openSpeech__SentTTBtn, .openSpeech__btnSend, [class*="SentTTBtn"]');
+      if (b && !b.classList.contains('disabled')) { b.click(); return 1; }
+      return 0;
+    })()""")
+    if sent:
+        time.sleep(2.5)
+        return "speak: sent"
+
     clicked = click_text(t, "Start") or t.js("""(() => {
-      const b = document.querySelector('.openSpeech__btnStart, .openSpeech__btn');
+      const b = document.querySelector('.openSpeech__btnStart, .openSpeech__btn:not(.openSpeech__btnRetry):not(.openSpeech__btnHear)');
       if (b && !b.classList.contains('disabled')) { b.click(); return 1; }
       return 0;
     })()""")
@@ -264,15 +337,12 @@ def handle_test(t, src, unit_handler=None, lesson_name=""):
         print("test retry", str(retry)[:60], flush=True)
     if unanswered(out):
         return "test-unanswered: " + out
-    poll.wait_until(
-        lambda: q(t, "return [...document.querySelectorAll('a,button,input')].some(e=>/^Check answer$/i.test((e.innerText||e.value||'').trim()))?1:0;"),
-        lambda v: v == 1, timeout=3.0, interval=0.12)
     total = st(t)["total"]
     counter = st(t)["counter"]
-    sub = q(t, "return document.querySelector('.learning__submitTestLink')?1:0;")
+    sub = q(t, "return document.querySelector('.learning__submitTestLink, .learning__tasksNav_testBtnW, a.learning__submitTestLink')?1:0;")
     is_last = total and counter == total
     if (sub and is_last) or is_last:
-        click(t, ".learning__submitTestLink")
+        click(t, "a.learning__submitTestLink, .learning__submitTestLink, .learning__tasksNav_testBtnW")
         t.js("(() => {const a=document.querySelector('.learning__submitTestLink'); if(a) angular.element(a).triggerHandler('click');})()")
         t.js("""(() => {
           const app = window.ng?.probe?.(document.querySelector('app'))?.componentInstance;
@@ -412,6 +482,7 @@ def main(max_iter=120):
     stuck = 0
     speak_tries = {}
     adv_tries = {}
+    intro_tries = {}
     media_done = set()
     unit_lock = ""
     lesson_lock = ""
@@ -427,6 +498,7 @@ def main(max_iter=120):
             unit_lock = lesson_lock = ""
             prev = None
             continue
+
         if not unit_lock:
             unit_lock = s.get("unit") or ""
         elif s.get("unit") and s["unit"] != unit_lock:
@@ -576,6 +648,7 @@ def main(max_iter=120):
             prev = None
             continue
 
+
         # test entry screen
         start_btn_present = q(t, "return document.querySelector('.btnStartTest, button.btnStartTest, input.btnStartTest') || [...document.querySelectorAll('button, input[type=button], a')].some(e=>/start test/i.test((e.innerText||e.value||'').trim()))?1:0;")
         if start_btn_present:
@@ -587,20 +660,57 @@ def main(max_iter=120):
             prev = None
             continue
 
+
         # test score / review screen (test already completed)
-        if "your test score is" in s["body"].lower() or ("review your answers" in s["body"].lower() and "next arrow" in s["body"].lower()):
-            print(f"-- test completed, advancing to finish lesson ({s.get('lesson')})")
+        if (
+            "your test score is" in s["body"].lower()
+            or ("review your answers" in s["body"].lower() and "next arrow" in s["body"].lower())
+        ):
+            print(f"-- test/course completed, advancing to finish lesson ({s.get('lesson')})")
             nxt = solver.set_next_step(t)
             time.sleep(1.0)
             require_lesson_complete(t)
             prev = None
             continue
 
+
+        test_intro_active = t.js("""(() => {
+            const p = document.querySelector('ed-la-taskspager');
+            const comp = window.ng?.probe?.(p?.parentElement)?.componentInstance;
+            if (comp && comp.isStepTest && comp.tasksNodes && Array.isArray(comp.tasksNodes.Children)) {
+                const curId = comp.tasksNodes.SelectedNode?.NodeId;
+                const curIdx = comp.tasksNodes.Children.findIndex(c => c.NodeId === curId);
+                if (curIdx === 0 && comp.tasksNodes.Children[1]) {
+                    try {
+                        comp.onTaskClick(comp.tasksNodes.Children[1]);
+                        return 1;
+                    } catch(e) {}
+                }
+            }
+            return 0;
+        })()""")
+        if test_intro_active:
+            # Bounded: if clicking the intro node never advances the pager the
+            # loop would reset `prev` every iteration and never trip the stall
+            # detector, so give up after 3 tries and handle the screen normally.
+            intro_key = (s.get("lesson"), s.get("step"))
+            if next_intro_attempt(intro_tries, intro_key):
+                print("started test from intro node")
+                time.sleep(1.5)
+                prev = None
+                continue
+            print(f"test intro did not advance ({intro_key}); handling screen normally")
+
         is_test = t.js(IS_TEST_JS)
         if q(t, "return document.querySelectorAll('a.chooseCaracterArrow').length ? 1 : 0;"):
             is_test = False
 
         if is_test:
+            poll.wait_until(
+                lambda: q(t, """return document.querySelectorAll('.prMCQ__qaSet, .prFITB__qaSet, .dnditem, .lessonMultipleAnswer, .TTpanswerDiv, .openSpeech__btnStart, .speakingInteract, ed-la-mcq, .prDDL__qaSet, .prOpenEnded__qaSet').length ? 1 : 0;"""),
+                lambda v: v == 1, timeout=8.0, interval=0.25)
+            d = solver.source_text(t)
+            src = (d.get("resource") or "") + "\n" + (d.get("body") or "")
             out = handle_test(t, src, unit_handler=unit_handler, lesson_name=s.get("lesson", ""))
         else:
             # intro / reading / interact intro / Step 1 Explore
@@ -609,11 +719,15 @@ def main(max_iter=120):
                 s.get("counter") == "Intro"
                 or q(t, "return document.querySelector('.learning__taskNavPagerCounterIW--intro') ? 1 : 0;")
             )
+            has_interactive = q(t, "return document.querySelectorAll('.prMCQ__qaSet, .lessonMultipleAnswer, .dnditem, .DDLOptions__selected, ed-la-mcq, .prOpenEnded__qaItemText, .wordBankTile').length ? 1 : 0;")
             is_explore = (
-                is_intro
-                or s["counter"] is None
-                or ("step 1" in step_name or "explore" in step_name)
-                or ("arrow next to the character" in s["body"].lower() and q(t, "return document.querySelectorAll('a.chooseCaracterArrow').length ? 1 : 0;"))
+                (
+                    is_intro
+                    or s["counter"] is None
+                    or ("step 1" in step_name or "explore" in step_name)
+                    or ("arrow next to the character" in s["body"].lower() and q(t, "return document.querySelectorAll('a.chooseCaracterArrow').length ? 1 : 0;"))
+                )
+                and not has_interactive
             )
             if is_explore:
                 # Check if choose speaker exists for interact
@@ -653,11 +767,15 @@ def main(max_iter=120):
                         time.sleep(2.5)
 
                 if not advance(t):
-                    if not is_intro:
-                        nxt = solver.set_next_step(t)
-                        print(f"-- fallback next step: {nxt}", flush=True)
-                        if nxt == 'last step':
-                            require_lesson_complete(t)
+                    t.js("""(() => {
+                        const t1 = document.querySelector('.learning__tasksNav_task');
+                        if (t1) { t1.click(); return 1; }
+                        return 0;
+                    })()""")
+                    nxt = solver.set_next_step(t)
+                    print(f"-- fallback next step: {nxt}", flush=True)
+                    if nxt == 'last step':
+                        require_lesson_complete(t)
                 prev = None
                 time.sleep(1.0)
                 continue
@@ -716,9 +834,11 @@ def main(max_iter=120):
             require_lesson_complete(t)
             prev = None
             continue
+
         if not advance(t):
             if s.get("counter") and s.get("total") and s["counter"] == s["total"]:
                 solver.set_next_step(t)
+                time.sleep(2.0)
 
 
 if __name__ == "__main__":
