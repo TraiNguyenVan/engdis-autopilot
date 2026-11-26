@@ -21,9 +21,9 @@ The courseware's scored assessment is the **Assessment Center exam** (midterm, f
 
 ### Assessment Center prompt
 
-This path is unverified in this repo: there is no Assessment Center fixture. Monitor the run and stop on a stall or an empty question; results are not guaranteed.
+This path is unverified in this repo: there is no Assessment Center fixture. Monitor the run and stop on a stall or an empty question; results are not guaranteed. The bootstrap enables a fake microphone, so it is not suitable for real speaking answers.
 
-> `/engdis-autopilot I have my Assessment Center <EXAM_TYPE> open in visible local Chrome on CDP port 9225. I explicitly authorize you to run the harness on this attempt. If any necessary details are unclear or missing, ask me first. Do not use cover.py, Docker, headless mode, or --unattended. Attach to the already-open exam tab with auto.py; monitor every question and verify an answer is registered before advancing. If a question is empty, the counter stalls, a reminder appears, or the page is ambiguous, stop without submitting and tell me what happened. Submit only after every question is visibly answered, report the score shown, then stop.`
+> `/engdis-autopilot Help me with my Assessment Center <EXAM_TYPE>. If any necessary details are unclear or missing, ask me first. Before launch, check the profile and port are not already in use; if they are, stop and tell me. Start visible local Chrome with python3 bootstrap_browser.py --headed --port 9225 --profile ~/.ed-profile and keep it running. Verify the window and CDP connection; if Chrome cannot start, stop and tell me. If the exam requires a real microphone, stop and tell me before starting the attempt: the bootstrap uses a fake audio device. Help me log in if needed, then wait for me to open the exam and explicitly authorize this attempt. Do not use cover.py, Docker, headless mode, or --unattended. Attach to the open exam tab with auto.py; monitor every question and verify an answer is registered before advancing. If a question is empty, the counter stalls, a reminder appears, or the page is ambiguous, stop without submitting and tell me what happened. Submit only after every question is visibly answered, report the score shown, then stop.`
 
 ### Assessment Center boundaries
 
