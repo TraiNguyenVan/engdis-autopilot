@@ -6,6 +6,8 @@ Automated browser testing and exercise solver harness for English Discoveries co
 
 ## Pick the right mode first
 
+In the example prompts below, replace placeholders with your details. If a required detail is missing or unclear, the agent should ask you before proceeding.
+
 | You want to | Run | Why |
 | :--- | :--- | :--- |
 | Lessons and practice, including **unit lesson tests** (not graded) | **Docker** (`docker compose run engdis`) or local | Headless is fine; lesson-test outcomes only affect unit completion percentage |
@@ -13,7 +15,7 @@ Automated browser testing and exercise solver harness for English Discoveries co
 
 If you have an Assessment Center exam, follow the **Assessment Center exam instructions immediately below**. Unit lesson tests are ungraded; Docker/automation is for practice and coverage only.
 
-## Assessment Center exams: midterms and finals
+## Graded exams: Assessment Center midterms and finals
 
 The courseware's scored assessment is the **Assessment Center exam** (midterm, final, placement). **Unit lesson tests are not graded** — they only move a unit's completion percentage.
 
@@ -21,7 +23,7 @@ The courseware's scored assessment is the **Assessment Center exam** (midterm, f
 
 Use this prompt for technical assistance only. The agent must not interact with exam content:
 
-> `/engdis-autopilot I have an Assessment Center midterm/final open in visible local Chrome. Do not use cover.py, auto.py, Docker, headless mode, or unattended mode. Do not read or answer exam questions, select answers, advance through questions, or submit. You may only confirm the browser/login/connection is working and help with technical issues without interacting with assessment content. I will take and submit the exam myself.`
+> `/engdis-autopilot I have an Assessment Center <EXAM_TYPE> open in visible local Chrome. If any necessary details are unclear or missing, ask me first. Do not use cover.py, auto.py, Docker, headless mode, or unattended mode. Do not read or answer exam questions, select answers, advance through questions, or submit. You may only confirm the browser/login/connection is working and help with technical issues without interacting with assessment content. I will take and submit the exam myself.`
 
 ### Assessment Center boundaries
 
@@ -81,17 +83,18 @@ Compatible with Claude Code, Cursor, Copilot, Hermes, and Codex via [Agent Skill
 Copy-paste these prompts into your agent chat:
 
 - **Run Specific Unit, Lesson, or Range**:
-  > `/engdis-autopilot Run unit 2 lesson "News" in course "Advanced 2" inside Docker.`  
-  > `/engdis-autopilot Run units 0-4 in course "Advanced 3" inside Docker.`
+  > `/engdis-autopilot Run unit <UNIT> lesson "<LESSON>" in course "<COURSE>" inside Docker. Ask me for any missing or unclear details first.`
+  >
+  > `/engdis-autopilot Run units <UNIT_RANGE> in course "<COURSE>" inside Docker. Ask me for any missing or unclear details first.`
 
 - **Unattended Mode (Non-Stop Overnight)**:
-  > `/engdis-autopilot Run unattended for course "Advanced 2" units 0-9. Skip stalls and finish the batch without waiting for input.`
+  > `/engdis-autopilot Run unattended for course "<COURSE>" units <UNIT_RANGE>. Skip stalls and finish the batch without waiting for input. Ask me for any missing or unclear details first.`
 
 - **Agent Yield Mode (Auto-Patch Stalls)**:
-  > `/engdis-autopilot Run course "Advanced 2" unit 5 in agent mode. If stalled (rc=6), inspect the fixture in logs/fixtures/, patch solver.py, and resume.`
+  > `/engdis-autopilot Run course "<COURSE>" unit <UNIT> in agent mode. If stalled (rc=6), inspect the fixture in logs/fixtures/, patch solver.py, and resume. Ask me for any missing or unclear details first.`
 
 - **Unit lesson test (not graded)**:
-  > `/engdis-autopilot Run the unit lesson Test step for course "Advanced 2", unit 2, lesson "News". This only changes the unit completion percentage; it is not an Assessment Center exam. Docker is fine.`
+  > `/engdis-autopilot Run the unit lesson Test step for course "<COURSE>", unit <UNIT>, lesson "<LESSON>". This only changes the unit completion percentage; it is not an Assessment Center exam. Docker is fine. Ask me for any missing or unclear details first.`
 
 `--unattended` means a stalled item is skipped. Do **not** use that mode for an Assessment Center exam.
 
