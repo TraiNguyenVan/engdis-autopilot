@@ -51,6 +51,7 @@ def st(t):
             const app = window.ng?.probe?.(document.querySelector('app'))?.componentInstance;
             const aNode = app?.navigationService?._stepsList?.SelectedNode;
             if (aNode?.NodeId) return (aNode.Name || 'Step') + ':' + aNode.NodeId;
+            if (aNode?.Name) return aNode.Name;
             return d[1] ? d[1].innerText.split('\\n')[0] : '';
         })()"""),
         "lesson": t.js("""(() => {const d=document.querySelectorAll('ed-la-dropdownlist'); return d[0]? d[0].innerText.split('\\n')[0] : '';})()"""),
@@ -202,6 +203,210 @@ def next_intro_attempt(tries, key, limit=3):
     return tries[key] <= limit
 
 
+IS_TEST_AREA_JS = """(() => {
+    if (document.querySelectorAll('ed-la-dropdownlist').length > 0) return false;
+    if (/TestArea\\.html/i.test(window.location?.href || '')) return true;
+    const app = window.ng?.probe?.(document.querySelector('app'))?.componentInstance;
+    return Boolean(app?.isTestEnv);
+})()"""
+
+TEST_WIDGETS_JS = (
+    "return document.querySelectorAll("
+    "'.prMCQ__qaSet, .prFITB__qaSet, .dnditem, .dndZone, .lessonMultipleAnswer, "
+    ".TTpanswerDiv, .openSpeech__btnStart, .speakingInteract, ed-la-mcq, "
+    ".prDDL__qaSet, .prOpenEnded__qaSet, .DDLOptions__selected, "
+    ".prOpenEnded__qaItemText, .writingEditFrame, textarea.writingTextarea, "
+    ".OpenEndedQ, .learning__selectTxt_st, span.st'"
+    ").length ? 1 : 0;"
+)
+
+ADVANCE_NEXT_PART_JS = """(() => {
+    const app = window.ng?.probe?.(document.querySelector('app'))?.componentInstance;
+    if (document.querySelectorAll('ed-la-dropdownlist').length > 0 && !app?.isTestEnv) {
+        return 0;
+    }
+    const nav = app?.navigationService;
+    const lList = nav?._lessonsList;
+    const lessons = lList?.Children;
+    if (!nav || !Array.isArray(lessons) || !lessons.length || typeof nav.selectedChanged !== 'function') {
+        return 0;
+    }
+    let curIdx = typeof lList.SelectedIndex === 'number' ? lList.SelectedIndex : -1;
+    if (curIdx < 0 && lList.SelectedNode?.NodeId !== undefined) {
+        curIdx = lessons.findIndex(c => c && c.NodeId === lList.SelectedNode.NodeId);
+    }
+    if (curIdx >= 0 && curIdx + 1 < lessons.length) {
+        const nxt = lessons[curIdx + 1];
+        if (!nxt || nxt.NodeId === undefined) return 0;
+        nxt.IsLocked = false;
+        try {
+            nav.selectedChanged({
+                nodeId: nxt.NodeId,
+                courseNodeType: 3,
+                selectedIndex: curIdx + 1
+            });
+            return 1;
+        } catch (e) {}
+    }
+    return 0;
+})()"""
+
+ADVANCE_TEST_INTRO_STEP_JS = """(() => {
+    const app = window.ng?.probe?.(document.querySelector('app'))?.componentInstance;
+    const nav = app?.navigationService;
+    const steps = nav?._stepsList?.Children;
+    if (nav && Array.isArray(steps) && steps[1] && typeof nav.selectedChanged === 'function') {
+        steps[1].IsLocked = false;
+        try {
+            nav.selectedChanged({
+                nodeId: steps[1].NodeId,
+                courseNodeType: 4,
+                selectedIndex: 1
+            });
+            return 1;
+        } catch (e) {}
+    }
+    return 0;
+})()"""
+
+UNANSWERED_TEST_DOM_JS = """const mcqUnanswered = [...document.querySelectorAll('.prMCQ__qaSet')].some(
+    e => !e.querySelector('.prMCQ__answers:not(.hide) .layout__radio:checked, .prMCQ__answers--checked')
+);
+const hasDdlSet = document.querySelectorAll('.prFITB__qaSet, .prDDL__qaSet').length > 0;
+const ddlUnanswered = hasDdlSet && [...document.querySelectorAll('.DDLOptions__selected')].some(
+    e => !String(e.innerText || e.textContent || '').trim()
+);
+const allZones = [...document.querySelectorAll('.dndZone')];
+const targetZones = allZones.filter(z => {
+    const dg = (typeof z.getAttribute === 'function' ? z.getAttribute('dg_name') : z.dg_name) || '';
+    const id = z.id || (typeof z.getAttribute === 'function' ? z.getAttribute('id') : '') || '';
+    return dg !== 'TTpTablePlaceHolder' && id !== 'TTpTablePlaceHolder';
+});
+const dndUnanswered = targetZones.length > 0 && targetZones.some(z => {
+    const hasItem = typeof z.querySelector === 'function' && !!z.querySelector('.dnditem, .draggable, .wordBankTile');
+    const hasText = String(z.innerText || z.textContent || '').trim().length > 0;
+    return !hasItem && !hasText;
+});
+return (mcqUnanswered || ddlUnanswered || dndUnanswered) ? 1 : 0;"""
+
+HAS_INCOMPLETE_ASSESSMENT_TASKS_JS = """(() => {
+    const app = window.ng?.probe?.(document.querySelector('app'))?.componentInstance;
+    if (!app?.isTestEnv) return 0;
+    const nav = app.navigationService;
+    const lList = nav?._lessonsList;
+    const lessons = lList?.Children;
+    if (!Array.isArray(lessons) || !lessons.length) return 0;
+
+    const isIntro = (n) => /testintronode|^intro$/i.test(String(n?.Name || '').trim());
+    const isDone = (n) => Boolean(n?.IsDone) || Number(n?.Progress ?? 0) >= 0.999;
+
+    let curLessonIdx = typeof lList.SelectedIndex === 'number' ? lList.SelectedIndex : -1;
+    if (curLessonIdx < 0 && lList.SelectedNode?.NodeId !== undefined) {
+        curLessonIdx = lessons.findIndex(c => c && c.NodeId === lList.SelectedNode.NodeId);
+    }
+
+    const tList = nav?._tasksList;
+    const curTasks = Array.isArray(tList?.Children) ? tList.Children : [];
+    let curTaskId = tList?.SelectedNode?.NodeId;
+    if (curTaskId === undefined && typeof tList?.SelectedIndex === 'number' && curTasks[tList.SelectedIndex]) {
+        curTaskId = curTasks[tList.SelectedIndex].NodeId;
+    }
+
+    const collectTasks = (lesson) => {
+        if (!Array.isArray(lesson?.Children) || !lesson.Children.length) return null;
+        const out = [];
+        for (const ch of lesson.Children) {
+            if (!ch || isIntro(ch)) continue;
+            if (Array.isArray(ch.Children) && ch.Children.length) {
+                for (const leaf of ch.Children) {
+                    if (leaf && !isIntro(leaf)) out.push(leaf);
+                }
+            } else {
+                out.push(ch);
+            }
+        }
+        return out.length ? out : null;
+    };
+
+    for (let lIdx = 0; lIdx < lessons.length; lIdx++) {
+        const lesson = lessons[lIdx];
+        if (!lesson || isIntro(lesson)) continue;
+        const nested = collectTasks(lesson);
+        const tasks = (lIdx === curLessonIdx && curTasks.length) ? curTasks : nested;
+        if (tasks !== null) {
+            const incIdx = tasks.findIndex(tk => tk && !isIntro(tk) && tk.NodeId !== curTaskId && !isDone(tk));
+            if (incIdx >= 0) {
+                if (typeof nav?.selectedChanged === 'function') {
+                    try {
+                        if (lIdx !== curLessonIdx && lesson.NodeId !== undefined) {
+                            lesson.IsLocked = false;
+                            nav.selectedChanged({ nodeId: lesson.NodeId, courseNodeType: 3, selectedIndex: lIdx });
+                        } else if (tasks[incIdx].NodeId !== undefined) {
+                            tasks[incIdx].IsLocked = false;
+                            nav.selectedChanged({ nodeId: tasks[incIdx].NodeId, courseNodeType: 5, selectedIndex: incIdx });
+                        }
+                    } catch (e) {}
+                }
+                return 1;
+            }
+        } else if (!isDone(lesson)) {
+            if (typeof nav?.selectedChanged === 'function' && lIdx !== curLessonIdx && lesson.NodeId !== undefined) {
+                try {
+                    lesson.IsLocked = false;
+                    nav.selectedChanged({ nodeId: lesson.NodeId, courseNodeType: 3, selectedIndex: lIdx });
+                } catch (e) {}
+            }
+            return 1;
+        }
+    }
+    return 0;
+})()"""
+
+
+def is_test_area(t):
+    """True when running inside Assessment Center (`TestArea.html`) without `ed-la-dropdownlist`."""
+    return bool(t.js(IS_TEST_AREA_JS))
+
+
+def is_test_intro_screen(s):
+    """True when state indicates a TestArea section/part intro (`TestIntroNode` or `Intro`)."""
+    counter = str(s.get("counter") or "").strip().lower()
+    step = str(s.get("step") or "").strip().lower()
+    return counter == "intro" or "testintronode" in step
+
+
+def advance_next_part(t):
+    """Cross multi-part Assessment Center `_lessonsList` boundaries (Part 1 -> Part 2 -> Part 3)."""
+    return bool(t.js(ADVANCE_NEXT_PART_JS))
+
+
+def advance_test_intro(t):
+    """Advance past a TestArea section/part intro via `advance(t)` or `_stepsList.Children[1]`."""
+    if advance(t):
+        return True
+    if t.js(ADVANCE_TEST_INTRO_STEP_JS):
+        return True
+    return advance_next_part(t)
+
+
+def has_incomplete_assessment_tasks(t):
+    """In Assessment Center mode (`isTestEnv`), verify all `_lessonsList` tasks are complete before submit."""
+    return bool(t.js(HAS_INCOMPLETE_ASSESSMENT_TASKS_JS))
+
+
+def has_score_text(body):
+    low = (body or "").lower()
+    return "your test score is" in low or "your score is" in low
+
+
+def extract_score_lines(body):
+    return [
+        ln.strip()
+        for ln in (body or "").splitlines()
+        if ln.strip() and ("%" in ln or "test score" in ln.lower() or "your score is" in ln.lower())
+    ][:2]
+
+
 def wait_text(t, needles, timeout=25):
     t0 = time.time()
     while time.time() - t0 < timeout:
@@ -326,9 +531,9 @@ def handle_test(t, src, unit_handler=None, lesson_name=""):
     })()""")
     if str(out).startswith("other:") and speak_widget:
         return handle_speaking(t, src)
-    # Require a checked answer in every MCQ set, including after retry.
+    # Require a registered answer in every MCQ, FITB/DDL, and target dndZone set, including after retry.
     def unanswered(result):
-        return result.startswith("other:") or bool(q(t, """return [...document.querySelectorAll('.prMCQ__qaSet')].some(e=>!e.querySelector('.prMCQ__answers:not(.hide) .layout__radio:checked, .prMCQ__answers--checked'))?1:0;"""))
+        return str(result).startswith("other:") or bool(q(t, UNANSWERED_TEST_DOM_JS))
 
     if unanswered(out):
         time.sleep(1.5)
@@ -336,14 +541,16 @@ def handle_test(t, src, unit_handler=None, lesson_name=""):
         out = retry
         print("test retry", str(retry)[:60], flush=True)
     if unanswered(out):
-        return "test-unanswered: " + out
+        return "test-unanswered: " + str(out)
     total = st(t)["total"]
     counter = st(t)["counter"]
-    sub = q(t, "return document.querySelector('.learning__submitTestLink, .learning__tasksNav_testBtnW, a.learning__submitTestLink')?1:0;")
+    sub = q(t, "return document.querySelector('#learning__tasksNav_submitTest, .learning__submitTestLink, .learning__tasksNav_testBtnW, a.learning__submitTestLink')?1:0;")
     is_last = total and counter == total
     if (sub and is_last) or is_last:
-        click(t, "a.learning__submitTestLink, .learning__submitTestLink, .learning__tasksNav_testBtnW")
-        t.js("(() => {const a=document.querySelector('.learning__submitTestLink'); if(a) angular.element(a).triggerHandler('click');})()")
+        if has_incomplete_assessment_tasks(t):
+            return "test-unanswered: incomplete-tasks"
+        click(t, "#learning__tasksNav_submitTest, a.learning__submitTestLink, .learning__submitTestLink, .learning__tasksNav_testBtnW")
+        t.js("(() => {const a=document.querySelector('#learning__tasksNav_submitTest, .learning__submitTestLink'); if(a && window.angular) angular.element(a).triggerHandler('click');})()")
         t.js("""(() => {
           const app = window.ng?.probe?.(document.querySelector('app'))?.componentInstance;
           if (typeof app?.navigationService?.submitTest === 'function') {
@@ -367,9 +574,10 @@ def handle_test(t, src, unit_handler=None, lesson_name=""):
         print(f"submit modal confirm result: {confirm_res}", flush=True)
         # Check if the review/score screen was triggered
         body = poll.wait_until(
-            lambda: t.js("(() => document.body.innerText.slice(0,500))()"),
-            lambda b: bool(b) and ("%" in b or "test score" in b.lower()), timeout=12.0, interval=0.3) or ""
-        score = [ln for ln in body.split("\n") if "%" in ln or "test score" in ln.lower()][:2]
+            lambda: t.js("(() => (document.body?.innerText || '').slice(0, 1500))()"),
+            lambda b: bool(b) and ("%" in b or "test score" in b.lower() or "your score is" in b.lower()),
+            timeout=12.0, interval=0.3) or ""
+        score = extract_score_lines(body)
         # Propagate step completion directly to Angular navigation service
         t.js("""(() => {
           const comp = window.ng?.probe?.(document.querySelector('app'))?.componentInstance;
@@ -501,7 +709,7 @@ def main(max_iter=120):
 
         if not unit_lock:
             unit_lock = s.get("unit") or ""
-        elif s.get("unit") and s["unit"] != unit_lock:
+        elif s.get("unit") and s["unit"] != unit_lock and not is_test_area(t):
             print("UNIT-CHANGED", unit_lock, "->", s["unit"])
             sys.exit(4)
         if not unit_handler and s.get("unit"):
@@ -662,10 +870,15 @@ def main(max_iter=120):
 
 
         # test score / review screen (test already completed)
+        body_low = (s.get("body") or "").lower()
         if (
-            "your test score is" in s["body"].lower()
-            or ("review your answers" in s["body"].lower() and "next arrow" in s["body"].lower())
+            has_score_text(s.get("body"))
+            or ("review your answers" in body_low and "next arrow" in body_low)
         ):
+            if is_test_area(t):
+                score = extract_score_lines(s.get("body"))
+                print(f"Assessment complete: {' | '.join(score) or 'completed'}", flush=True)
+                return
             print(f"-- test/course completed, advancing to finish lesson ({s.get('lesson')})")
             nxt = solver.set_next_step(t)
             time.sleep(1.0)
@@ -704,6 +917,15 @@ def main(max_iter=120):
         is_test = t.js(IS_TEST_JS)
         if q(t, "return document.querySelectorAll('a.chooseCaracterArrow').length ? 1 : 0;"):
             is_test = False
+
+        if is_test and is_test_intro_screen(s) and not q(t, TEST_WIDGETS_JS):
+            intro_key = ("testarea_intro", s.get("lesson"), s.get("step"), s.get("counter"))
+            if next_intro_attempt(intro_tries, intro_key):
+                moved = advance_test_intro(t)
+                print(f"advanced past test intro ({s.get('step')}, moved={bool(moved)})", flush=True)
+                time.sleep(1.0)
+                prev = None
+                continue
 
         if is_test:
             poll.wait_until(
@@ -831,14 +1053,30 @@ def main(max_iter=120):
         if is_test and out.startswith("test-unanswered:"):
             continue
         if is_test and str(out).startswith("test-submit"):
+            if is_test_area(t):
+                post_body = t.js("(() => document.body?.innerText || '')()") or ""
+                if has_score_text(post_body) or has_score_text(str(out)):
+                    score = extract_score_lines(post_body) or extract_score_lines(str(out))
+                    print(f"Assessment complete: {' | '.join(score) or out}", flush=True)
+                    return
+                prev = None
+                continue
             require_lesson_complete(t)
             prev = None
             continue
 
         if not advance(t):
             if s.get("counter") and s.get("total") and s["counter"] == s["total"]:
-                solver.set_next_step(t)
+                nxt = solver.set_next_step(t)
                 time.sleep(2.0)
+                if nxt in ("last step", "cannot advance step") and advance_next_part(t):
+                    print("-- advanced to next assessment part", flush=True)
+                    time.sleep(1.5)
+                    prev = None
+            elif advance_next_part(t):
+                print("-- advanced to next assessment part", flush=True)
+                time.sleep(1.5)
+                prev = None
 
 
 if __name__ == "__main__":
