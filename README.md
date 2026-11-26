@@ -10,9 +10,8 @@ Automated browser testing and exercise solver harness for English Discoveries co
 | A **lesson test inside a unit** that counts | **Local headed browser** (`bootstrap_browser.py --headed`) | You must see the questions, the modals and the score screen; a silent skip is an unrecoverable wrong score |
 | An **Assessment Center midterm/final** | **Open it yourself**, then run the DOM loop locally with `--headed` | `cover.py` cannot open it (no unit/lesson node), but the questions use the same test widgets, so `auto.py` applies once the exam is open. Unverified in this repo — see [Assessment Center](#assessment-center-midterms-and-finals-eg-advanced-2-midterm) |
 
-Everything below assumes you picked one of these. Lesson tests are covered in
-[Running a lesson test that counts](#running-a-test-that-counts);
-the Assessment Center case is explained right below it. Docker starts at
+Everything below assumes you picked one of these. Both test paths are in
+[Running a test that counts](#running-a-test-that-counts). Docker starts at
 [Quickstart](#quickstart).
 
 ---
