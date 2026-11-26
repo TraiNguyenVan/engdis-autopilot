@@ -354,26 +354,22 @@ def solve_multi(t, src):
 
 
 _BANK_ZONE = "TTpTablePlaceHolder"
-_DRAG_DROP_OFFSETS = ((0, 0), (-25, 0), (25, 0), (0, -6), (0, 6))
+_BANK_ZONE_SEL = f'.dndZone[dg_name="{_BANK_ZONE}"], .dndZone#{_BANK_ZONE}'
+_DRAG_DROP_OFFSETS = ((0, 0), (-25, 0), (25, 0), (0, -4), (0, 4), (0, 8))
 
 
 def _is_bank_zone(z):
-    return bool(z) and (z.get("n") == _BANK_ZONE or z.get("id") == _BANK_ZONE)
+    return isinstance(z, dict) and (z.get("n") == _BANK_ZONE or z.get("id") == _BANK_ZONE)
 
 
 def _clamp_drop_offset(z, dx, dy, fallback_box=None):
-    w = z.get("w") if z.get("w") is not None else z.get("width")
-    if w is None and isinstance(fallback_box, dict):
-        w = fallback_box.get("w")
-    if isinstance(w, (int, float)) and not isinstance(w, bool) and w > 0:
-        max_dx = max(0.0, w / 2.0 - min(4.0, w / 4.0))
-        dx = max(-max_dx, min(max_dx, dx))
-    h = z.get("h") if z.get("h") is not None else z.get("height")
-    if h is None and isinstance(fallback_box, dict):
-        h = fallback_box.get("h")
-    if isinstance(h, (int, float)) and not isinstance(h, bool) and h > 0:
-        max_dy = max(0.0, h / 2.0 - min(3.0, h / 4.0))
-        dy = max(-max_dy, min(max_dy, dy))
+    if dx:
+        w = z.get("w") if z.get("w") is not None else z.get("width")
+        if w is None and isinstance(fallback_box, dict):
+            w = fallback_box.get("w")
+        if isinstance(w, (int, float)) and not isinstance(w, bool) and w > 0:
+            max_dx = max(0.0, w / 2.0 - min(4.0, w / 4.0))
+            dx = max(-max_dx, min(max_dx, dx))
     return dx, dy
 
 
@@ -384,18 +380,95 @@ def _scroll_drag_into_view(t, zone_sel, word):
       const items = [...document.querySelectorAll('.dnditem')];
       const it = items.find(e => e.innerText.trim().toLowerCase() === want)
               || items.find(e => e.innerText.toLowerCase().includes(want));
-      const h = window.innerHeight || document.documentElement.clientHeight || 800;
-      const w = window.innerWidth || document.documentElement.clientWidth || 1280;
+      const vh = () => window.innerHeight || document.documentElement.clientHeight || 800;
+      const vw = () => window.innerWidth || document.documentElement.clientWidth || 1280;
       const out = el => {
-        if (!el || !el.scrollIntoView) return false;
+        if (!el) return false;
         const r = el.getBoundingClientRect();
+        const h = vh(), w = vw();
         return r.top < 0 || r.bottom > h || r.left < 0 || r.right > w;
       };
+      const scrollByDelta = (el, dx, dy) => {
+        let moved = false;
+        let cur = el ? el.parentElement : null;
+        while (cur && cur !== document.body && cur !== document.documentElement) {
+          if (dy && cur.scrollHeight > cur.clientHeight) {
+            const b = cur.scrollTop;
+            cur.scrollTop += dy;
+            if (cur.scrollTop !== b) moved = true;
+          }
+          if (dx && cur.scrollWidth > cur.clientWidth) {
+            const b = cur.scrollLeft;
+            cur.scrollLeft += dx;
+            if (cur.scrollLeft !== b) moved = true;
+          }
+          cur = cur.parentElement;
+        }
+        if ((dx || dy) && typeof window.scrollBy === 'function') {
+          const bx = window.scrollX || window.pageXOffset || 0;
+          const by = window.scrollY || window.pageYOffset || 0;
+          window.scrollBy(dx, dy);
+          const ax = window.scrollX || window.pageXOffset || 0;
+          const ay = window.scrollY || window.pageYOffset || 0;
+          if (ax !== bx || ay !== by) moved = true;
+        }
+        return moved;
+      };
       let scrolled = 0;
-      if (out(it)) { it.scrollIntoView({block: 'nearest', inline: 'nearest'}); scrolled = 1; }
-      if (out(z)) { z.scrollIntoView({block: 'nearest', inline: 'nearest'}); scrolled = 1; }
+      if (it && it.scrollIntoView && out(it)) {
+        it.scrollIntoView({block: 'nearest', inline: 'nearest'});
+        scrolled = 1;
+      }
+      if (z && z.scrollIntoView && out(z)) {
+        z.scrollIntoView({block: 'nearest', inline: 'nearest'});
+        scrolled = 1;
+      }
+      if (it && z && (out(it) || out(z))) {
+        const h = vh(), w = vw();
+        let ir = it.getBoundingClientRect(), zr = z.getBoundingClientRect();
+        let dx = 0, dy = 0;
+        const minTop = Math.min(ir.top, zr.top), maxBot = Math.max(ir.bottom, zr.bottom);
+        if (maxBot - minTop <= h) {
+          if (minTop < 0) dy = minTop;
+          else if (maxBot > h) dy = maxBot - h;
+        } else {
+          const icy = ir.top + ir.height / 2, zcy = zr.top + zr.height / 2;
+          const minCy = Math.min(icy, zcy), maxCy = Math.max(icy, zcy);
+          if (maxCy - minCy <= h) {
+            if (minCy < 0) dy = minCy;
+            else if (maxCy > h) dy = maxCy - h;
+          }
+        }
+        const minLeft = Math.min(ir.left, zr.left), maxRight = Math.max(ir.right, zr.right);
+        if (maxRight - minLeft <= w) {
+          if (minLeft < 0) dx = minLeft;
+          else if (maxRight > w) dx = maxRight - w;
+        }
+        const moved = (dx || dy) ? scrollByDelta(it, dx, dy) : false;
+        if (moved) scrolled = 1;
+        if (out(it) && it.scrollIntoView) {
+          ir = it.getBoundingClientRect();
+          zr = z.getBoundingClientRect();
+          const icy = ir.top + ir.height / 2, icx = ir.left + ir.width / 2;
+          const fitsBoth = (Math.max(ir.bottom, zr.bottom) - Math.min(ir.top, zr.top)) <= h;
+          if ((!moved && fitsBoth) || icy < 0 || icy > h || icx < 0 || icx > w) {
+            it.scrollIntoView({block: 'nearest', inline: 'nearest'});
+            scrolled = 1;
+          }
+        }
+      }
+      const ir = it ? it.getBoundingClientRect() : null;
       const zr = z ? z.getBoundingClientRect() : null;
-      return {scrolled: scrolled, w: zr ? zr.width : null, h: zr ? zr.height : null};
+      const h = vh(), w = vw();
+      const inView = r => !!r && (r.top + r.height / 2) >= 0 && (r.top + r.height / 2) <= h
+                        && (r.left + r.width / 2) >= 0 && (r.left + r.width / 2) <= w;
+      return {
+        scrolled: scrolled,
+        w: zr ? zr.width : null,
+        h: zr ? zr.height : null,
+        sourceInView: inView(ir),
+        targetInView: inView(zr)
+      };
     })()""" % (json.dumps(str(word).strip()), json.dumps(zone_sel)))
     if isinstance(meta, dict) and meta.get("scrolled") == 1:
         time.sleep(0.1)
@@ -419,8 +492,9 @@ def _drag_snapshot(t):
           items: [...z.querySelectorAll('.dnditem')].map(x => x.innerText.trim())
         };
       });
-      const b = [...document.querySelectorAll('.dndZone')].find(isBank);
-      const bank = b ? [...b.querySelectorAll('.dnditem')].map(x => x.innerText.trim()) : [];
+      const bank = [...document.querySelectorAll('.dndZone')]
+        .filter(isBank)
+        .flatMap(b => [...b.querySelectorAll('.dnditem')].map(x => x.innerText.trim()));
       return { zones: zones, bank: bank };
     })()""") or {}
     return res.get("zones", []), res.get("bank", [])
@@ -429,9 +503,10 @@ def _drag_snapshot(t):
 def solve_drag(t, src):
     zones, bank = _drag_snapshot(t)
     target_zones = [z for z in zones if not _is_bank_zone(z)]
-    bank_sel = f'.dndZone[dg_name="{_BANK_ZONE}"], #{_BANK_ZONE}'
+    bank_sel = f'{_BANK_ZONE_SEL}, #{_BANK_ZONE}'
     if target_zones and all(z["items"] for z in target_zones):
         print("-- drag: zones pre-filled; clearing and re-dropping")
+        moved_to_bank = False
         for z in target_zones:
             for item_text in z["items"]:
                 _scroll_drag_into_view(t, bank_sel, item_text)
@@ -441,10 +516,11 @@ def solve_drag(t, src):
                 if not it or not bz:
                     continue
                 t.drag_xy(it["cx"], it["cy"], bz["cx"], bz["cy"])
+                moved_to_bank = True
                 time.sleep(0.5)
         zones, bank = _drag_snapshot(t)
         target_zones = [z for z in zones if not _is_bank_zone(z)]
-        if target_zones and all(z["items"] for z in target_zones):
+        if moved_to_bank and target_zones and all(z["items"] for z in target_zones):
             return "drag: already"
     prompt = t.js("""(() => {
       const p = document.querySelector('ed-la-matching, ed-la-practicearea, .learning__angPracticeW, .practicearea');
@@ -467,7 +543,7 @@ def solve_drag(t, src):
     # clear zones whose current item is not the desired one
     for zid, word in mapping.items():
         zid = str(zid)
-        if zid == _BANK_ZONE:
+        if _is_bank_zone({"n": zid, "id": zid}):
             continue
         cur = t.js(f"""(() => {{const z=document.querySelector('.dndZone[dg_name="{zid}"]'); return z? [...z.querySelectorAll('.dnditem')].map(x=>x.innerText.trim()):[];}})()""")
         for item_text in (cur or []):
@@ -486,7 +562,7 @@ def solve_drag(t, src):
     done = []
     for zid, word in mapping.items():
         zid = str(zid)
-        if zid == _BANK_ZONE:
+        if _is_bank_zone({"n": zid, "id": zid}):
             continue
         ok = False
         zone_sel = f'.dndZone[dg_name="{zid}"]'
@@ -526,7 +602,7 @@ def solve_sequence(t, src):
       const seen = new Set();
       for (const z of zones) {
         const n = z.getAttribute('dg_name');
-        if (!n || n === 'TTpTablePlaceHolder' || seen.has(n)) continue;
+        if (!n || n === 'TTpTablePlaceHolder' || z.id === 'TTpTablePlaceHolder' || seen.has(n)) continue;
         seen.add(n);
         const item = z.querySelector('.dnditem');
         unique.push({
@@ -1000,7 +1076,7 @@ def do_task(t, src):
       if(document.querySelectorAll('.lessonMultipleAnswer').length) return 'multi';
       if(document.querySelector('.sequenceZone, .prSeq__zone--txt, .prSeqImg__zone, .sequenceZoneWrapper')) return 'sequence';
       if(document.querySelectorAll('.dnditem').length && document.querySelectorAll('.dndZone').length) {
-        if(!document.querySelector('.dndZone[dg_name="TTpTablePlaceHolder"]')) return 'sequence';
+        if(!document.querySelector('.dndZone[dg_name="TTpTablePlaceHolder"], .dndZone#TTpTablePlaceHolder')) return 'sequence';
         return 'drag';
       }
       if(document.querySelectorAll('.TTpanswerDiv').length && document.querySelectorAll('.draggable').length) return 'lcloze';
