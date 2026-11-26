@@ -11,6 +11,8 @@ import config
 LLM_URL = config.LLM_URL
 LLM_KEY = config.LLM_KEY
 LLM_MODELS = list(config.LLM_MODELS)
+_INIT_LLM_TIMEOUT = config.LLM_TIMEOUT
+LLM_TIMEOUT = _INIT_LLM_TIMEOUT
 
 SCRATCH = config.SCRATCH
 
@@ -20,8 +22,10 @@ def ask(prompt, audio_b64=None, max_tokens=800):
     content = [{"type": "text", "text": prompt}]
     if audio_b64:
         content.append({"type": "input_audio", "input_audio": {"data": audio_b64, "format": "mp3"}})
+    timeout = LLM_TIMEOUT if LLM_TIMEOUT != _INIT_LLM_TIMEOUT else config.LLM_TIMEOUT
     last = None
     for pool_round in range(2):
+        fast_failover = len(LLM_MODELS) > 1 and pool_round == 0
         for model in LLM_MODELS:
             payload = {"model": model, "messages": [{"role": "user", "content": content}],
                        "max_tokens": max_tokens, "temperature": 0}
@@ -33,7 +37,7 @@ def ask(prompt, audio_b64=None, max_tokens=800):
                 try:
                     req = urllib.request.Request(LLM_URL, data=json.dumps(payload).encode(),
                                                 headers=headers)
-                    body = urllib.request.urlopen(req, timeout=15).read().decode()
+                    body = urllib.request.urlopen(req, timeout=timeout).read().decode()
                     break
                 except urllib.error.HTTPError as e:
                     last = e
@@ -49,11 +53,17 @@ def ask(prompt, audio_b64=None, max_tokens=800):
                             break
                         print("! model %s 429 RPM rate limited, backing off 8s..." % model, flush=True)
                         time.sleep(8 * (attempt + 1))
+                    elif fast_failover:
+                        print("! model %s HTTP %s, failing over to next model" % (model, e.code), flush=True)
+                        break
                     elif attempt < 3:
                         time.sleep(2 * (attempt + 1))
                 except Exception as e:
                     last = e
                     print("! llm %s (try %d/4): %s" % (model, attempt + 1, str(e)[:140]), flush=True)
+                    if fast_failover:
+                        print("! model %s failed, failing over to next model" % model, flush=True)
+                        break
                     if attempt < 3:
                         time.sleep(2 * (attempt + 1))
             if body is not None:
