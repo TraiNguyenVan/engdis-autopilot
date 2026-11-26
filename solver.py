@@ -841,10 +841,7 @@ def solve_errorfix(t, src=""):
             f"done={state.get('done')}")
 
 
-_DDL_PLACEHOLDERS = {
-    "", "select", "select...", "select an option",
-    "choose", "choose...", "choose an option", "---", "--",
-}
+_DDL_CARETS = "\u25be\u25bc\u25b4\u25b2\u2304\u2303\u2228\u2227"
 
 
 def _norm_ddl(text, strip_punct=False):
@@ -855,6 +852,13 @@ def _norm_ddl(text, strip_punct=False):
     if strip_punct:
         s = "".join(ch if ch.isalnum() else " " for ch in s)
     return " ".join(s.split()).lower()
+
+
+def _norm_ddl_selected(text):
+    s = str(text or "")
+    for ch in _DDL_CARETS:
+        s = s.replace(ch, " ")
+    return _norm_ddl(s)
 
 
 def _strip_ddl_prefix(text):
@@ -874,11 +878,16 @@ def _match_ddl_option(want, options):
     raw_want = str(want or "").strip()
     if not raw_want or not options:
         return None
-    valid = [
-        (idx, str(opt or "").strip())
-        for idx, opt in enumerate(options)
-        if _norm_ddl(opt) not in _DDL_PLACEHOLDERS
-    ]
+    valid = []
+    for idx, opt in enumerate(options):
+        if isinstance(opt, dict):
+            if opt.get("placeholder"):
+                continue
+            txt = str(opt.get("text") or "").strip()
+        else:
+            txt = str(opt or "").strip()
+        if txt:
+            valid.append((idx, txt))
     if not valid:
         return None
 
@@ -922,22 +931,43 @@ def _match_ddl_option(want, options):
     return None
 
 
-def _ddl_selected_ok(selected_text, target_text):
-    if _norm_ddl(selected_text) in _DDL_PLACEHOLDERS:
+def _ddl_selected_ok(selected_text, target_text, is_placeholder=False):
+    if is_placeholder:
         return False
-    return _match_ddl_option(target_text, [selected_text]) == 0
+    sel = _norm_ddl_selected(selected_text)
+    tgt = _norm_ddl_selected(target_text)
+    if not sel or not tgt:
+        return False
+    return sel == tgt
 
 
 _FITB_DOM_JS = r"""
   const CONTAINER_SEL = '.DDLOptionsW, .prFITB__DDLOptionsW, .prDDL__DDLOptionsW, .prFITB__qaItem, .prDDL__qaItem, .fitb-ddl';
   const OPT_SEL = '.DDLOptions__listItem, .DDLOptions__list li, .DDLOptions__option';
+  const hasAttr = (el, name) => !!(el && el.hasAttribute && el.hasAttribute(name));
+  const getAttr = (el, name) => (el && el.getAttribute) ? el.getAttribute(name) : null;
+  const getOptText = (el) => ((el && (el.innerText || el.textContent)) || '').replace(/\s+/g, ' ').trim();
+  const isOptionPlaceholder = (el) => {
+    if (!el) return true;
+    if (el.disabled === true || hasAttr(el, 'disabled')) return true;
+    if (String(getAttr(el, 'aria-disabled') || '').toLowerCase() === 'true') return true;
+    if (hasAttr(el, 'data-placeholder') && String(getAttr(el, 'data-placeholder') || '').toLowerCase() !== 'false') return true;
+    const role = String(getAttr(el, 'role') || '').toLowerCase();
+    if (role === 'presentation' || role === 'separator') return true;
+    const cls = String(el.className || '');
+    if (/(?:^|[\s_-])(placeholder|disabled)(?:$|[\s_-])/i.test(cls)) return true;
+    if (el.querySelector && el.querySelector('[disabled], [aria-disabled="true"], [data-placeholder]:not([data-placeholder="false"]), [class*="placeholder"]')) {
+      return true;
+    }
+    return false;
+  };
   const isVisible = (el) => {
     if (!el) return false;
     const hasLayout = !!(typeof document !== 'undefined' && document.body && document.body.getBoundingClientRect &&
       (document.body.getBoundingClientRect().width > 0 || document.body.getBoundingClientRect().height > 0));
     let cur = el;
     while (cur && cur.nodeType === 1) {
-      if (cur.hidden || (cur.hasAttribute && cur.hasAttribute('hidden'))) return false;
+      if (cur.hidden || hasAttr(cur, 'hidden')) return false;
       const cls = cur.classList;
       if (cls && (cls.contains('hide') || cls.contains('ng-hide') || cls.contains('hidden') || cls.contains('DDLOptions__list--closed'))) return false;
       const st = (typeof window !== 'undefined' && window.getComputedStyle) ? window.getComputedStyle(cur) : cur.style;
@@ -978,15 +1008,16 @@ _FITB_DOM_JS = r"""
     const arr = [...nodes];
     return arr.filter(el => !arr.some(other => other !== el && el.contains && el.contains(other)));
   };
+  const selectableOptions = (nodes) => dedupOptions(nodes).filter(el => !isOptionPlaceholder(el) && getOptText(el) !== '');
   const getScopedOptions = (s) => {
     const containers = getContainers(s);
     for (const c of containers) {
-      const raw = dedupOptions(c.querySelectorAll(OPT_SEL));
+      const raw = selectableOptions(c.querySelectorAll(OPT_SEL));
       if (!raw.length) continue;
       const vis = raw.filter(isVisible);
       if (vis.length) return {items: vis, scope: 'container'};
     }
-    const docVis = dedupOptions(document.querySelectorAll(OPT_SEL)).filter(el => {
+    const docVis = selectableOptions(document.querySelectorAll(OPT_SEL)).filter(el => {
       if (!isVisible(el)) return false;
       let anc = el.parentElement;
       while (anc && anc !== document.body && anc !== document.documentElement) {
@@ -1000,7 +1031,7 @@ _FITB_DOM_JS = r"""
     });
     if (docVis.length) return {items: docVis, scope: 'document'};
     for (const c of containers) {
-      const raw = dedupOptions(c.querySelectorAll(OPT_SEL));
+      const raw = selectableOptions(c.querySelectorAll(OPT_SEL));
       if (raw.length) return {items: raw, scope: 'container-hidden'};
     }
     return {items: [], scope: 'none'};
@@ -1016,7 +1047,23 @@ _FITB_DOM_JS = r"""
     }
     return ((s.innerText || s.textContent) || '').replace(/\s+/g, ' ').trim();
   };
-  const getOptText = (el) => ((el && (el.innerText || el.textContent)) || '').replace(/\s+/g, ' ').trim();
+  const isSelectedPlaceholder = (s) => {
+    if (!s || !getSelectedText(s)) return true;
+    if (hasAttr(s, 'data-placeholder') && String(getAttr(s, 'data-placeholder') || '').toLowerCase() !== 'false') return true;
+    if (String(getAttr(s, 'aria-placeholder') || '') && getAttr(s, 'data-selected') === 'false') return true;
+    const cls = String(s.className || '');
+    if (/(?:^|[\s_-])(placeholder|unselected)(?:$|[\s_-])/i.test(cls)) return true;
+    if (s.cloneNode) {
+      const clone = s.cloneNode(true);
+      if (clone.querySelectorAll) {
+        clone.querySelectorAll(OPT_SEL + ', .DDLOptions__list').forEach(e => e.remove());
+        if (clone.querySelector && clone.querySelector('[data-placeholder]:not([data-placeholder="false"]), [class*="placeholder"], [class*="unselected"]')) {
+          return true;
+        }
+      }
+    }
+    return false;
+  };
   const fireMouse = (el) => {
     if (!el || typeof el.dispatchEvent !== 'function') return;
     for (const type of ['mousedown', 'mouseup']) {
@@ -1031,14 +1078,14 @@ _FITB_DOM_JS = r"""
   const closeOtherMenus = (s, forceClose) => {
     const others = [...document.querySelectorAll('.DDLOptions__selected')].filter(x => x !== s);
     const hasOpenOther = forceClose || others.some(o =>
-      getContainers(o).some(c => dedupOptions(c.querySelectorAll(OPT_SEL)).some(isVisible))
+      getContainers(o).some(c => selectableOptions(c.querySelectorAll(OPT_SEL)).some(isVisible))
     );
     if (!hasOpenOther) return;
     if (document.body && typeof document.body.click === 'function') {
       try { document.body.click(); } catch (e) {}
     }
     for (const o of others) {
-      const stillOpen = getContainers(o).some(c => dedupOptions(c.querySelectorAll(OPT_SEL)).some(isVisible));
+      const stillOpen = getContainers(o).some(c => selectableOptions(c.querySelectorAll(OPT_SEL)).some(isVisible));
       if (stillOpen && typeof o.click === 'function') {
         try { o.click(); } catch (e) {}
       }
@@ -1064,7 +1111,7 @@ def solve_fitb(t, src=""):
       return {text: text, lists: lists};
     """)
     if not data or not data.get("lists"):
-        return "fitb: nodata"
+        return "other: fitb: nodata"
     lines = "\n".join(f"{i+1}. {' | '.join(opts)}" for i, opts in enumerate(data["lists"]))
     ctx = f"SOURCE MATERIAL:\n{src}\n\n" if src and str(src).strip() else ""
     prompt = (ctx + "Sentence with blanks (numbered):\n" + data["text"] +
@@ -1093,7 +1140,7 @@ def solve_fitb(t, src=""):
                 if ({attempt} > 0) fireMouse(s);
                 s.click();
               }}
-              return {{status: 'ok', selected: getSelectedText(s)}};
+              return {{status: 'ok', selected: getSelectedText(s), selectedPlaceholder: isSelectedPlaceholder(s)}};
             """) or {}
             force_close = False
             if open_res.get("status") == "nf":
@@ -1102,12 +1149,13 @@ def solve_fitb(t, src=""):
             time.sleep(0.3)
             opts_res = jso(t, _FITB_DOM_JS + f"""
               const s = getTrigger({i});
-              if (!s) return {{status: 'nf', options: [], scope: 'none', selected: ''}};
+              if (!s) return {{status: 'nf', options: [], scope: 'none', selected: '', selectedPlaceholder: true}};
               const res = getScopedOptions(s);
               return {{
                 status: 'ok',
                 scope: res.scope,
                 selected: getSelectedText(s),
+                selectedPlaceholder: isSelectedPlaceholder(s),
                 options: res.items.map(getOptText)
               }};
             """) or {}
@@ -1131,36 +1179,38 @@ def solve_fitb(t, src=""):
             chosen_text = dom_opts[match_idx]
             pick_res = jso(t, _FITB_DOM_JS + f"""
               const s = getTrigger({i});
-              if (!s) return {{clicked: 0, selected: ''}};
+              if (!s) return {{clicked: 0, selected: '', selectedPlaceholder: true}};
               const res = getScopedOptions(s);
               const wantText = {json.dumps(chosen_text)};
-              let pick = res.items[{match_idx}];
-              if (!pick || getOptText(pick) !== wantText) {{
-                pick = res.items.find(el => getOptText(el) === wantText) || pick;
-              }}
-              if (!pick) return {{clicked: 0, selected: getSelectedText(s)}};
+              const candidate = res.items[{match_idx}];
+              const pick = (candidate && getOptText(candidate) === wantText)
+                ? candidate
+                : (res.items.find(el => getOptText(el) === wantText) || null);
+              if (!pick) return {{clicked: 0, selected: getSelectedText(s), selectedPlaceholder: isSelectedPlaceholder(s)}};
               if (typeof pick.scrollIntoView === 'function') {{
                 pick.scrollIntoView({{block: 'nearest', inline: 'nearest'}});
               }}
               if ({attempt} > 0) fireMouse(pick);
               pick.click();
               let selAfter = getSelectedText(s);
-              if ({attempt} > 0 && !selAfter && pick.querySelector) {{
+              let selPh = isSelectedPlaceholder(s);
+              if ({attempt} > 0 && (selPh || selAfter !== wantText) && pick.querySelector) {{
                 const child = pick.querySelector('a, span, div, button');
                 if (child && typeof child.click === 'function') {{
                   fireMouse(child);
                   child.click();
                   selAfter = getSelectedText(s);
+                  selPh = isSelectedPlaceholder(s);
                 }}
               }}
               let rect = null;
-              if (pick.getBoundingClientRect) {{
+              if (isVisible(pick) && getOptText(pick) === wantText && pick.getBoundingClientRect) {{
                 const r = pick.getBoundingClientRect();
                 if (r.width > 0 && r.height > 0) {{
                   rect = {{cx: Math.round(r.x + r.width / 2), cy: Math.round(r.y + r.height / 2), w: r.width, h: r.height}};
                 }}
               }}
-              return {{clicked: 1, selected: selAfter, rect: rect}};
+              return {{clicked: 1, selected: selAfter, selectedPlaceholder: selPh, rect: rect}};
             """) or {}
             time.sleep(0.25)
             if not pick_res.get("clicked"):
@@ -1168,21 +1218,37 @@ def solve_fitb(t, src=""):
                 st = "noopt"
                 continue
             sel_after = pick_res.get("selected") or ""
-            if not _ddl_selected_ok(sel_after, chosen_text):
-                sel_after = jso(t, _FITB_DOM_JS + f"const s = getTrigger({i}); return getSelectedText(s);") or ""
-            if not _ddl_selected_ok(sel_after, chosen_text) and attempt > 0:
+            sel_ph = bool(pick_res.get("selectedPlaceholder"))
+            if not _ddl_selected_ok(sel_after, chosen_text, sel_ph):
+                chk = jso(
+                    t,
+                    _FITB_DOM_JS
+                    + f"const s = getTrigger({i}); return {{selected: getSelectedText(s), selectedPlaceholder: isSelectedPlaceholder(s)}};",
+                ) or {}
+                sel_after = chk.get("selected") or ""
+                sel_ph = bool(chk.get("selectedPlaceholder"))
+            if not _ddl_selected_ok(sel_after, chosen_text, sel_ph) and attempt > 0:
                 rect = pick_res.get("rect")
                 if isinstance(rect, dict) and rect.get("w", 0) > 0 and callable(getattr(t, "click_xy", None)):
                     t.click_xy(rect["cx"], rect["cy"])
                     time.sleep(0.2)
-                    sel_after = jso(t, _FITB_DOM_JS + f"const s = getTrigger({i}); return getSelectedText(s);") or ""
-            if _ddl_selected_ok(sel_after, chosen_text):
+                    chk = jso(
+                        t,
+                        _FITB_DOM_JS
+                        + f"const s = getTrigger({i}); return {{selected: getSelectedText(s), selectedPlaceholder: isSelectedPlaceholder(s)}};",
+                    ) or {}
+                    sel_after = chk.get("selected") or ""
+                    sel_ph = bool(chk.get("selectedPlaceholder"))
+            if _ddl_selected_ok(sel_after, chosen_text, sel_ph):
                 st = "ok"
                 break
             st = "empty"
             force_close = True
         out.append(f"{i}={st}")
-    return "fitb: " + " ".join(out)
+    summary = "fitb: " + " ".join(out)
+    if any(not item.endswith("=ok") for item in out):
+        return "other: " + summary
+    return summary
 
 
 def solve_select_text(t, src):
