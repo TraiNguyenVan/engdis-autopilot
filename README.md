@@ -144,8 +144,8 @@ unit lesson, so the difference is entirely in how it is driven, not in the solve
 
 ## Quickstart
 
-> Running a lesson test that counts, or an Assessment Center exam? Read
-> [Running a lesson test that counts](#running-a-test-that-counts) first —
+> Running a lesson test or an Assessment Center exam? Read
+> [Running a test that counts](#running-a-test-that-counts) first —
 > the Docker path below is headless on purpose and will not show you the screen.
 
 ### 1. Setup
@@ -187,7 +187,7 @@ Copy-paste these prompts into your agent chat:
   >
   > Use this prompt as-is. It encodes the three rules that matter: `--headed`, no
   > `--unattended`, one lesson with `--step=Test`. See
-  > [Running a lesson test that counts](#running-a-test-that-counts) for the
+  > [Running a test that counts](#running-a-test-that-counts) for the
   > manual equivalent.
 
 - **Assessment Center midterm/final**:
@@ -223,7 +223,7 @@ python3 cover.py <unit> 1 --course="Advanced 2" --lesson="<lesson name>" --step=
 
 Nothing in this path goes through Docker: a container renders offscreen, so an
 empty question, a reminder modal and the score screen are all invisible. Full
-procedure and the stop conditions: [Running a lesson test that counts](#running-a-test-that-counts).
+procedure and the stop conditions: [Running a test that counts](#running-a-test-that-counts).
 
 ---
 
