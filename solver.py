@@ -8,21 +8,61 @@ import base64, json, os, subprocess, sys, time, urllib.request
 import edlib
 import config
 
+_monotonic = time.monotonic
+
+
+class _ConfigTimeout(int):
+    pass
+
+
 LLM_URL = config.LLM_URL
 LLM_KEY = config.LLM_KEY
 LLM_MODELS = list(config.LLM_MODELS)
-_INIT_LLM_TIMEOUT = config.LLM_TIMEOUT
-LLM_TIMEOUT = _INIT_LLM_TIMEOUT
+LLM_TIMEOUT = _ConfigTimeout(config.LLM_TIMEOUT)
 
 SCRATCH = config.SCRATCH
 
 
 # ---------- LLM ----------
+def _read_with_deadline(resp, deadline, timeout):
+    try:
+        reader = resp.read1 if hasattr(resp, "read1") else getattr(getattr(resp, "fp", None), "read1", None)
+        if reader is None:
+            data = resp.read()
+            if _monotonic() > deadline:
+                raise TimeoutError("LLM request exceeded %ss total timeout" % timeout)
+            return data
+        target = resp if hasattr(resp, "read1") else getattr(resp, "fp", None)
+        chunks = []
+        while True:
+            remaining = deadline - _monotonic()
+            if remaining <= 0:
+                raise TimeoutError("LLM request exceeded %ss total timeout" % timeout)
+            fp = getattr(target, "fp", None)
+            raw = getattr(fp, "raw", None)
+            sock = getattr(raw, "_sock", None)
+            if sock is not None and hasattr(sock, "settimeout"):
+                sock.settimeout(remaining)
+            chunk = reader(16384)
+            if not chunk:
+                break
+            chunks.append(chunk)
+        if _monotonic() > deadline:
+            raise TimeoutError("LLM request exceeded %ss total timeout" % timeout)
+        return b"".join(chunks)
+    finally:
+        if hasattr(resp, "close"):
+            try:
+                resp.close()
+            except Exception:
+                pass
+
+
 def ask(prompt, audio_b64=None, max_tokens=800):
     content = [{"type": "text", "text": prompt}]
     if audio_b64:
         content.append({"type": "input_audio", "input_audio": {"data": audio_b64, "format": "mp3"}})
-    timeout = LLM_TIMEOUT if LLM_TIMEOUT != _INIT_LLM_TIMEOUT else config.LLM_TIMEOUT
+    timeout = int(config.LLM_TIMEOUT if isinstance(LLM_TIMEOUT, _ConfigTimeout) else LLM_TIMEOUT)
     last = None
     for pool_round in range(2):
         fast_failover = len(LLM_MODELS) > 1 and pool_round == 0
@@ -35,9 +75,11 @@ def ask(prompt, audio_b64=None, max_tokens=800):
             body = None
             for attempt in range(4):
                 try:
+                    deadline = _monotonic() + timeout
                     req = urllib.request.Request(LLM_URL, data=json.dumps(payload).encode(),
                                                 headers=headers)
-                    body = urllib.request.urlopen(req, timeout=timeout).read().decode()
+                    resp = urllib.request.urlopen(req, timeout=timeout)
+                    body = _read_with_deadline(resp, deadline, timeout).decode()
                     break
                 except urllib.error.HTTPError as e:
                     last = e
