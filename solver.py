@@ -190,16 +190,25 @@ def _has_attached_transcript(src: str) -> bool:
         return False
     for marker in ("AUDIO TRANSCRIPT:", "[TRANSCRIPT]"):
         idx = src.find(marker)
-        if idx >= 0 and src[idx + len(marker):].strip():
-            return True
+        if idx >= 0:
+            after = src[idx + len(marker):]
+            if after.startswith("\r\n"):
+                after = after[2:]
+            elif after.startswith("\n"):
+                after = after[1:]
+            first_line = after.splitlines()[0] if after.splitlines() else ""
+            if first_line.strip():
+                return True
     return False
 
 
 def _media_cache_key(url: str) -> str:
-    """Extensionless filename stem used for transcript/media cache files."""
+    """Media-distinguishing cache key (stem_ext) without double extensions."""
     fname = (url or "").split("?", 1)[0].rsplit("/", 1)[-1]
-    stem, dot, _ext = fname.rpartition(".")
-    return stem if (dot and stem) else fname
+    stem, dot, ext = fname.rpartition(".")
+    if dot and stem and ext:
+        return f"{stem}_{ext.lower()}"
+    return fname
 
 
 def attach_transcript(t, src, label="--", prefer_last_media=False):
@@ -271,10 +280,11 @@ def media_url(t, prefer_last=False):
     pick_last = "1" if prefer_last else "0"
     return t.js(f"""(() => {{
       const pick = list => list.map(x => x.currentSrc || x.src).filter(Boolean);
+      const all = pick([...document.querySelectorAll('audio,video')]);
       const scoped = pick([...document.querySelectorAll(
         'ed-la-resourcearea audio, ed-la-resourcearea video, ed-la-practicearea audio, ed-la-practicearea video, #pmContainer audio, #pmContainer video'
       )]);
-      const urls = scoped.length ? scoped : pick([...document.querySelectorAll('audio,video')]);
+      const urls = {pick_last} ? all : (scoped.length ? scoped : all);
       if (!urls.length) return null;
       return {pick_last} ? urls[urls.length - 1] : urls[0];
     }})()""")
@@ -325,11 +335,18 @@ def transcript_for(url, cache_key):
         with open(path, encoding="utf-8") as f:
             return f.read()
     fname = (url or "").split("?", 1)[0].rsplit("/", 1)[-1]
-    if fname and fname != cache_key:
-        legacy_path = os.path.join(SCRATCH, f"tr_{fname}.txt")
-        if os.path.exists(legacy_path):
-            with open(legacy_path, encoding="utf-8") as f:
-                return f.read()
+    stem, dot, _ext = fname.rpartition(".")
+    legacy_candidates = []
+    if fname:
+        legacy_candidates.append(fname)
+    if dot and stem:
+        legacy_candidates.append(stem)
+    for legacy_key in legacy_candidates:
+        if legacy_key != cache_key:
+            legacy_path = os.path.join(SCRATCH, f"tr_{legacy_key}.txt")
+            if os.path.exists(legacy_path):
+                with open(legacy_path, encoding="utf-8") as f:
+                    return f.read()
 
     # Extract file extension from URL
     ext = ".mp3"
@@ -1135,6 +1152,7 @@ def main(max_tasks=200):
     t = edlib.tab()
     last_lesson = None
     lesson_resource = ""
+    lesson_transcript = ""
     src = ""
     stuck = 0
     prev_sig = None
@@ -1154,6 +1172,7 @@ def main(max_tasks=200):
             last_lesson = st["lesson"]
             s = source_text(t) or {}
             lesson_resource = s.get("resource") or ""
+            lesson_transcript = ""
             src = lesson_resource + "\n" + (s.get("body") or "")
             print(f"== {st['lesson']} / {st['step']}")
 
@@ -1189,7 +1208,14 @@ def main(max_tasks=200):
         # audio/video comprehension task: refresh per-task source and attach transcript
         cur = source_text(t) or {}
         res_txt = (cur.get("resource") or "").strip() or lesson_resource
-        task_src = attach_transcript(t, res_txt + "\n" + (cur.get("body") or ""))
+        base_src = res_txt + "\n" + (cur.get("body") or "")
+        task_src = attach_transcript(t, base_src)
+        if _has_attached_transcript(task_src):
+            idx = task_src.find("AUDIO TRANSCRIPT:")
+            if idx >= 0:
+                lesson_transcript = task_src[idx:]
+        elif lesson_transcript:
+            task_src = base_src + "\n\n" + lesson_transcript
 
         if stuck >= 3:
             # try switching step, then give up
