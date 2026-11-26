@@ -4,10 +4,14 @@ from typing import List
 
 def _load_dotenv(path: str = ".env") -> None:
     """Load key-value pairs from .env if present into os.environ without overwriting."""
-    if os.environ.get("ED_SKIP_DOTENV") == "1" or not os.path.exists(path):
+    if os.environ.get("ED_SKIP_DOTENV") == "1":
+        return
+    candidates = [path, os.path.join(os.path.dirname(__file__), ".env"), os.path.join(os.path.dirname(__file__), "..", ".env")]
+    target = next((p for p in candidates if os.path.exists(p)), None)
+    if not target:
         return
     try:
-        with open(path, "r", encoding="utf-8") as f:
+        with open(target, "r", encoding="utf-8") as f:
             for line in f:
                 line = line.strip()
                 if not line or line.startswith("#") or "=" not in line:
@@ -52,7 +56,14 @@ def _build_chat_completions_url(base_or_full_url: str) -> str:
 
 
 CDP_PORT: int = _get_int("ED_CDP_PORT", 9225)
-SCRATCH: str = os.environ.get("ED_SCRATCH", "/opt/data/cache/scratch/ed22u1")
+# Homelab container layout keeps the cache under /opt/data; a bare-metal clone
+# keeps it inside the checkout so `solver.SCRATCH` is writable in both modes.
+_SCRATCH_DEFAULT = (
+    "/opt/data/cache/scratch/ed22u1"
+    if os.path.isdir("/opt/data")
+    else os.path.join(os.path.dirname(os.path.abspath(__file__)), "data", "scratch")
+)
+SCRATCH: str = os.environ.get("ED_SCRATCH", _SCRATCH_DEFAULT)
 REPORT_DIR: str = os.environ.get("ED_REPORT_DIR", ".")
 CRED_PATH: str = os.environ.get("ED_CRED", "")
 DRY_RUN: bool = _get_bool("ED_DRY_RUN", False)

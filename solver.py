@@ -10,7 +10,8 @@ import config
 
 LLM_URL = config.LLM_URL
 LLM_KEY = config.LLM_KEY
-LLM_MODELS = config.LLM_MODELS
+LLM_MODELS = list(config.LLM_MODELS)
+
 SCRATCH = config.SCRATCH
 
 
@@ -20,26 +21,49 @@ def ask(prompt, audio_b64=None, max_tokens=800):
     if audio_b64:
         content.append({"type": "input_audio", "input_audio": {"data": audio_b64, "format": "mp3"}})
     last = None
-    for model in LLM_MODELS:
-        payload = {"model": model, "messages": [{"role": "user", "content": content}],
-                   "max_tokens": max_tokens, "temperature": 0}
-        headers = {"Content-Type": "application/json"}
-        if LLM_KEY:
-            headers["Authorization"] = "Bearer " + LLM_KEY
-        body = None
-        for attempt in range(4):
-            try:
-                req = urllib.request.Request(LLM_URL, data=json.dumps(payload).encode(),
-                                            headers=headers)
-                body = urllib.request.urlopen(req, timeout=45).read().decode()
+    for pool_round in range(2):
+        for model in LLM_MODELS:
+            payload = {"model": model, "messages": [{"role": "user", "content": content}],
+                       "max_tokens": max_tokens, "temperature": 0}
+            headers = {"Content-Type": "application/json", "User-Agent": "curl/8.4.0"}
+            if LLM_KEY:
+                headers["Authorization"] = "Bearer " + LLM_KEY
+            body = None
+            for attempt in range(4):
+                try:
+                    req = urllib.request.Request(LLM_URL, data=json.dumps(payload).encode(),
+                                                headers=headers)
+                    body = urllib.request.urlopen(req, timeout=15).read().decode()
+                    break
+                except urllib.error.HTTPError as e:
+                    last = e
+                    err_msg = ""
+                    try:
+                        err_msg = e.read().decode("utf-8")
+                    except Exception:
+                        pass
+                    print("! llm %s (try %d/4 HTTP %s): %s | %s" % (model, attempt + 1, e.code, str(e)[:100], err_msg[:160]), flush=True)
+                    if e.code == 429:
+                        if "TPD" in err_msg or "tokens per day" in err_msg:
+                            print("! model %s daily token limit exhausted, switching" % model, flush=True)
+                            break
+                        print("! model %s 429 RPM rate limited, backing off 8s..." % model, flush=True)
+                        time.sleep(8 * (attempt + 1))
+                    elif attempt < 3:
+                        time.sleep(2 * (attempt + 1))
+                except Exception as e:
+                    last = e
+                    print("! llm %s (try %d/4): %s" % (model, attempt + 1, str(e)[:140]), flush=True)
+                    if attempt < 3:
+                        time.sleep(2 * (attempt + 1))
+            if body is not None:
                 break
-            except Exception as e:
-                last = e
-                print("! llm %s (try %d/4): %s" % (model, attempt + 1, str(e)[:140]), flush=True)
-                if attempt < 3:
-                    time.sleep(2 * (attempt + 1))
-        if body is None:
-            continue
+        if body is not None:
+            break
+        if pool_round == 0:
+            print("! pool exhausted on rate limit, backing off 8s before retry...", flush=True)
+            time.sleep(8)
+    if body is not None:
         if body.lstrip().startswith("data:"):
             out = []
             for line in body.splitlines():
@@ -57,7 +81,7 @@ def ask(prompt, audio_b64=None, max_tokens=800):
             return json.loads(body)["choices"][0]["message"]["content"]
         except Exception as e:
             last = e
-            print("! llm %s parse: %s" % (model, str(e)[:140]), flush=True)
+            print("! llm parse: %s" % str(e)[:140], flush=True)
     raise last if last else RuntimeError("llm failed")
 
 
@@ -67,7 +91,7 @@ def ask_json(prompt, audio_b64=None, max_tokens=800):
     if i < 0 or j < 0:
         return None
     try:
-        return json.loads(txt[i:j + 1])
+        return json.loads(txt[i:j + 1], strict=False)
     except Exception as e:
         print("! json: %s | raw=%r" % (str(e)[:80], txt[:120]), flush=True)
         return None
@@ -166,24 +190,37 @@ def play_media(t, timeout=45, quick=False):
     if not present:
         return False
     t.js("""(() => {
+      window._mediaEndedLatched = false;
       const b=document.querySelector('.layout__mediaPlayPause');
       if(b) b.click();
-      document.querySelectorAll('audio,video').forEach(m => { try { m.playbackRate = 16.0; } catch(e){} });
+      document.querySelectorAll('audio,video').forEach(m => {
+        try {
+          m.playbackRate = 16.0;
+          m.addEventListener('ended', () => { window._mediaEndedLatched = true; }, { once: true });
+        } catch(e){}
+      });
       return 1;
     })()""")
     t0 = time.time()
+    started = False
     while time.time() - t0 < timeout:
-        time.sleep(1.0)
+        time.sleep(0.5)
         st = t.js("""(() => {
+          if (window._mediaEndedLatched) return 'ended';
           const a=[...document.querySelectorAll('audio,video')].filter(x=>(x.currentSrc||x.src));
           if(!a.length) return 'none';
           const el=a.sort((p,q)=>((q.duration||0)-(p.duration||0)))[0];
           try { el.playbackRate = 16.0; } catch(e){}
           if(el.ended || (el.duration && el.currentTime >= el.duration - 0.5)) return 'ended';
-          if(el.currentTime>0 && el.paused) { const b=document.querySelector('.layout__mediaPlayPause'); if(b) b.click(); }
-          return el.currentTime.toFixed(1)+'/'+(el.duration||'?');
+          if(el.currentTime > 0) return 'playing';
+          return 'waiting';
         })()""")
         if st == "ended":
+            return True
+        if st == "playing":
+            started = True
+        elif started and st == "waiting":
+            # Player finished and reset to 0
             return True
         if quick and (time.time() - t0 >= 4.0):
             return True
@@ -195,18 +232,21 @@ def media_url(t):
       return a? (a.currentSrc||a.src): null;})()""")
 
 
-def transcribe_groq(mp3_path: str) -> str:
-    """Transcribe audio file via Groq Whisper API (fast & free)."""
-    if not config.GROQ_API_KEY or not os.path.exists(mp3_path):
+def transcribe_groq(media_path: str) -> str:
+    """Transcribe audio/video file via Groq Whisper API (fast & free)."""
+    if not config.GROQ_API_KEY or not os.path.exists(media_path):
         return ""
     try:
         boundary = "----WebKitFormBoundary7MA4YWxkTrZu0gW"
-        with open(mp3_path, "rb") as f:
-            mp3_data = f.read()
+        with open(media_path, "rb") as f:
+            media_data = f.read()
+        fname = os.path.basename(media_path)
+        ext = os.path.splitext(fname)[1].lower().lstrip(".") or "mp3"
+        mime = "video/mp4" if ext == "mp4" else ("audio/mpeg" if ext == "mp3" else f"audio/{ext}")
         body = bytearray()
         body.extend(f"--{boundary}\r\nContent-Disposition: form-data; name=\"model\"\r\n\r\n{config.GROQ_WHISPER_MODEL}\r\n".encode())
-        body.extend(f"--{boundary}\r\nContent-Disposition: form-data; name=\"file\"; filename=\"audio.mp3\"\r\nContent-Type: audio/mpeg\r\n\r\n".encode())
-        body.extend(mp3_data)
+        body.extend(f"--{boundary}\r\nContent-Disposition: form-data; name=\"file\"; filename=\"{fname}\"\r\nContent-Type: {mime}\r\n\r\n".encode())
+        body.extend(media_data)
         body.extend(f"\r\n--{boundary}--\r\n".encode())
 
         url = f"{config.GROQ_BASE_URL.rstrip('/')}/audio/transcriptions"
@@ -231,25 +271,45 @@ def transcribe_groq(mp3_path: str) -> str:
 
 
 def transcript_for(url, cache_key):
+    os.makedirs(SCRATCH, exist_ok=True)
     path = os.path.join(SCRATCH, f"tr_{cache_key}.txt")
     if os.path.exists(path):
         return open(path).read()
-    mp3 = os.path.join(SCRATCH, f"m_{cache_key}.mp3")
-    if not os.path.exists(mp3):
-        subprocess.run(["ffmpeg", "-v", "error", "-y", "-i", url, "-vn", "-ac", "1", "-ar", "16000", mp3], check=False)
-    if not os.path.exists(mp3):
+    
+    # Extract file extension from URL
+    ext = ".mp3"
+    clean_url = url.split("?")[0].lower()
+    for e in [".mp4", ".m4a", ".wav", ".webm", ".mp3"]:
+        if clean_url.endswith(e):
+            ext = e
+            break
+            
+    media_file = os.path.join(SCRATCH, f"m_{cache_key}{ext}")
+    if not os.path.exists(media_file):
+        try:
+            req = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0"})
+            with urllib.request.urlopen(req, timeout=30) as resp:
+                with open(media_file, "wb") as f:
+                    f.write(resp.read())
+        except Exception as e:
+            print(f"! failed to download media {url}: {e}", flush=True)
+            
+    if not os.path.exists(media_file):
         return ""
 
     # 1. Try Groq Whisper STT first if configured
-    txt = transcribe_groq(mp3)
+    txt = transcribe_groq(media_file)
 
-    # 2. Fall back to multimodal LLM input_audio
-    if not txt:
-        b64 = base64.b64encode(open(mp3, "rb").read()).decode()
+    # 2. Fall back to multimodal LLM input_audio if mp3
+    if not txt and ext == ".mp3":
+        b64 = base64.b64encode(open(media_file, "rb").read()).decode()
         txt = ask("Transcribe this audio exactly. Output only the transcript.", audio_b64=b64, max_tokens=2000)
 
     if txt:
-        open(path, "w").write(txt)
+        try:
+            open(path, "w", encoding="utf-8").write(txt)
+        except Exception:
+            pass
     return txt
 
 
@@ -294,22 +354,31 @@ def solve_multi(t, src):
 
 
 def _drag_snapshot(t):
-    zones = t.js("""(() => [...document.querySelectorAll('.dndZone')].map(z=>({n:z.getAttribute('dg_name'), items:[...z.querySelectorAll('.dnditem')].map(x=>x.innerText.trim())})))()""")
-    bank = t.js("""(() => {const b=[...document.querySelectorAll('.dndZone')].find(z=>z.getAttribute('dg_name')==='TTpTablePlaceHolder');
-      return b? [...b.querySelectorAll('.dnditem')].map(x=>x.innerText.trim()):[];})()""")
-    return zones, bank
+    res = t.js("""(() => {
+      const zones = [...document.querySelectorAll('.dndZone')].map(z => {
+        let label = '';
+        const row = z.closest('.prMT_T2T__answersRow, .prSeq__zone--txt, tr, .answersRow');
+        if (row) {
+          const lbl = row.querySelector('.prMT_T2T__answersText, .containerHeader, th, .label');
+          if (lbl) label = lbl.innerText.trim();
+        }
+        return {
+          n: z.getAttribute('dg_name'),
+          label: label,
+          items: [...z.querySelectorAll('.dnditem')].map(x => x.innerText.trim())
+        };
+      });
+      const b = [...document.querySelectorAll('.dndZone')].find(z => z.getAttribute('dg_name') === 'TTpTablePlaceHolder');
+      const bank = b ? [...b.querySelectorAll('.dnditem')].map(x => x.innerText.trim()) : [];
+      return { zones: zones, bank: bank };
+    })()""") or {}
+    return res.get("zones", []), res.get("bank", [])
 
 
 def solve_drag(t, src):
-    jso(t, "document.body.style.zoom='0.8'; return 1;")
-    time.sleep(1)
     zones, bank = _drag_snapshot(t)
     target_zones = [z for z in zones if z["n"] != "TTpTablePlaceHolder"]
     if target_zones and all(z["items"] for z in target_zones):
-        # Filled zones are NOT proof the app recorded the answer: a failed drop,
-        # a reload, or a previous run leaves items sitting in the zones while the
-        # server still gates progress. Returning early here wedged progress at
-        # that task forever (silent STUCK). Clear back to the bank and re-answer.
         print("-- drag: zones pre-filled; clearing and re-dropping")
         for z in target_zones:
             for item_text in z["items"]:
@@ -324,13 +393,16 @@ def solve_drag(t, src):
         target_zones = [z for z in zones if z["n"] != "TTpTablePlaceHolder"]
         if target_zones and all(z["items"] for z in target_zones):
             return "drag: already"
-    prompt = t.js("""(() => {const p=document.querySelector('ed-la-practicearea'); return p? p.innerText.slice(0,2500):'';})()""")
-    a_lines = [f"{i}. [{z['n']}] {z['items'][0] if z['items'] else '(empty)'}" for i, z in enumerate(target_zones)]
+    prompt = t.js("""(() => {
+      const p = document.querySelector('ed-la-matching, ed-la-practicearea, .learning__angPracticeW, .practicearea');
+      return p ? p.innerText.slice(0, 2500) : '';
+    })()""") or ""
+    a_lines = [f"{i}. [id={z['n']}] {z.get('label') or ''} : {z['items'][0] if z['items'] else '(empty)'}" for i, z in enumerate(target_zones)]
     q = (f"SOURCE MATERIAL:\n{src}\n\nEXERCISE TEXT:\n{prompt}\n\n"
-         f"Target blanks (id, text):\n" + "\n".join(a_lines) +
+         f"Target blanks/topics (id, label, current):\n" + "\n".join(a_lines) +
          f"\n\nWord bank (to place):\n" + "\n".join(f"- {w}" for w in bank) +
-         '\n\nMatch each blank id to the exact bank word that belongs there. '
-         'Reply {"map": {"0": "<exact bank word>", "1": "..."}}.')
+         '\n\nMatch each blank id to the exact bank word/phrase that belongs there based on the material. '
+         'Reply JSON only: {"map": {"0": "<exact bank word>", "1": "..."}}.')
     r = ask_json(q, max_tokens=2000)
     mapping = (r or {}).get("map", {})
     if not mapping:
@@ -343,7 +415,7 @@ def solve_drag(t, src):
     bank_zone = "TTpTablePlaceHolder"
     for zid, word in mapping.items():
         cur = t.js(f"""(() => {{const z=document.querySelector('.dndZone[dg_name="{zid}"]'); return z? [...z.querySelectorAll('.dnditem')].map(x=>x.innerText.trim()):[];}})()""")
-        for item_text in cur:
+        for item_text in (cur or []):
             if str(word).strip().lower() in item_text.lower():
                 continue
             for _ in range(3):
@@ -371,13 +443,13 @@ def solve_drag(t, src):
             time.sleep(0.8)
             now = t.js(f"""(() => {{const z=document.querySelector('.dndZone[dg_name="{zid}"]');
               return z? [...z.querySelectorAll('.dnditem')].map(x=>x.innerText.trim()):[];}})()""")
-            if any(str(word).strip().lower() in x.lower() for x in now):
+            if any(str(word).strip().lower() in x.lower() for x in (now or [])):
                 ok = True
                 break
         done.append(f"{zid}={'ok' if ok else 'FAIL'}")
 
-    # leftover bank words that clearly belong nowhere: drag out of bank to first free zone as fallback
     return "drag: " + " ".join(done)
+
 
 
 
@@ -905,29 +977,34 @@ def next_task(t):
 
 
 def set_step(t, index):
-    """Switch step via ed-la-dropdownlist component or navigationService (index 0-based)."""
+    """Switch step via navigationService or ed-la-dropdownlist component (index 0-based)."""
     return t.js(f"""(() => {{
+      const app = document.querySelector('app') ? window.ng?.probe?.(document.querySelector('app'))?.componentInstance : null;
+      const nav = app?.navigationService;
+      if (nav && nav._stepsList && nav._stepsList.Children && nav._stepsList.Children[{index}]) {{
+        const k = nav._stepsList.Children[{index}];
+        k.IsLocked = false;
+        try {{
+          nav.selectedChanged({{
+            nodeId: k.NodeId,
+            courseNodeType: 4,
+            selectedIndex: {index}
+          }}, true, false);
+          return k.Name + ' (' + k.NodeId + ')';
+        }} catch(e) {{}}
+      }}
       const dd1 = document.querySelectorAll('ed-la-dropdownlist')[1];
       const comp = dd1 ? window.ng?.probe?.(dd1)?.componentInstance : null;
       const listObj = comp?.dropDownListObj;
       if (comp && listObj && listObj.Children && listObj.Children[{index}]) {{
         const target = listObj.Children[{index}];
+        target.IsLocked = false;
         try {{
           comp.selectListItem({{preventDefault(){{}}}}, target.NodeId, false, {index} + 1);
           return target.Name + ' (' + target.NodeId + ') via comp';
         }} catch(e) {{}}
       }}
-      const app = document.querySelector('app') ? window.ng?.probe?.(document.querySelector('app'))?.componentInstance : null;
-      const nav = app?.navigationService;
-      if (!nav || !nav._stepsList || !nav._stepsList.Children) return 'no nav';
-      const k = nav._stepsList.Children[{index}];
-      if (!k) return 'no step ' + {index};
-      nav.selectedChanged({{
-        nodeId: k.NodeId,
-        courseNodeType: 4,
-        selectedIndex: {index}
-      }}, true, false);
-      return k.Name + ' (' + k.NodeId + ')';
+      return 'no step ' + {index};
     }})()""")
 
 
@@ -937,39 +1014,46 @@ def set_next_step(t):
       const dd1 = document.querySelectorAll('ed-la-dropdownlist')[1];
       const comp = dd1 ? window.ng?.probe?.(dd1)?.componentInstance : null;
       const listObj = comp?.dropDownListObj;
+      const app = document.querySelector('app') ? window.ng?.probe?.(document.querySelector('app'))?.componentInstance : null;
+      const nav = app?.navigationService;
       
       let cur = -1;
-      if (comp && typeof comp.selectedListItemIndex === 'number' && comp.selectedListItemIndex > 0) {
-        cur = comp.selectedListItemIndex - 1;
+      if (nav && nav._stepsList && typeof nav._stepsList.SelectedIndex === 'number') {
+        cur = nav._stepsList.SelectedIndex;
       }
       if (cur < 0 && listObj && typeof listObj.SelectedIndex === 'number') {
         cur = listObj.SelectedIndex;
       }
+      if (cur < 0 && comp && typeof comp.selectedListItemIndex === 'number') {
+        cur = comp.selectedListItemIndex;
+      }
       
-      const app = document.querySelector('app') ? window.ng?.probe?.(document.querySelector('app'))?.componentInstance : null;
-      const nav = app?.navigationService;
       const totalSteps = (listObj && listObj.Children ? listObj.Children.length : 0) || (nav && nav._stepsList && nav._stepsList.Children ? nav._stepsList.Children.length : 0);
       
       if (cur < 0) cur = 0;
       if (totalSteps > 0 && cur + 1 >= totalSteps) return 'last step';
       
       const nextIdx = cur + 1;
+      if (nav && nav._stepsList && nav._stepsList.Children && nav._stepsList.Children[nextIdx]) {
+        const k = nav._stepsList.Children[nextIdx];
+        k.IsLocked = false;
+        try {
+          nav.selectedChanged({
+            nodeId: k.NodeId,
+            courseNodeType: 4,
+            selectedIndex: nextIdx
+          }, true, false);
+          return (k.Name || 'step') + ' (' + k.NodeId + ')';
+        } catch(e) {}
+      }
+      
       if (comp && listObj && listObj.Children && listObj.Children[nextIdx]) {
         const target = listObj.Children[nextIdx];
+        target.IsLocked = false;
         try {
           comp.selectListItem({preventDefault(){}}, target.NodeId, false, nextIdx + 1);
           return (target.Name || 'step') + ' (' + target.NodeId + ') via comp';
         } catch(e) {}
-      }
-      
-      if (nav && nav._stepsList && nav._stepsList.Children && nav._stepsList.Children[nextIdx]) {
-        const k = nav._stepsList.Children[nextIdx];
-        nav.selectedChanged({
-          nodeId: k.NodeId,
-          courseNodeType: 4,
-          selectedIndex: nextIdx
-        }, true, false);
-        return (k.Name || 'step') + ' (' + k.NodeId + ')';
       }
 
       // Fallback DOM clicks

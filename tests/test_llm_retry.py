@@ -30,7 +30,9 @@ class LlmRetryTests(unittest.TestCase):
              patch.object(solver, "LLM_MODELS", ["test-model"]):
             with self.assertRaises(ConnectionError):
                 solver.ask("hi")
-        self.assertEqual(mock_time.sleep.call_count, 3)
+        # 4 attempts per model (3 backoffs) x 2 pool rounds, plus the 8s pause
+        # between the two pool rounds.
+        self.assertEqual(mock_time.sleep.call_count, 7)
 
 
 if __name__ == "__main__":

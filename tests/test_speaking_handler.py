@@ -13,10 +13,22 @@ class SpeakingHandlerTests(unittest.TestCase):
              patch.object(auto, "click_text", return_value=0), \
              patch.object(auto.time, "sleep"):
             tab.js.side_effect = [
+                0,  # no Send-to-Teacher button
                 1,  # querySelector .openSpeech__btnStart: clicked
             ]
             result = auto.handle_speaking(tab, "")
         self.assertEqual(result, "speak: clicked")
+
+    def test_handle_speaking_sends_recording_without_forging_progress(self):
+        tab = Mock()
+        with patch.object(auto, "q", return_value=0), \
+             patch.object(auto, "click_text", return_value=0), \
+             patch.object(auto.time, "sleep"):
+            tab.js.side_effect = [1]  # Send-to-Teacher clicked
+            result = auto.handle_speaking(tab, "")
+        self.assertEqual(result, "speak: sent")
+        for call in tab.js.call_args_list:
+            self.assertNotIn("setProgress", call.args[0])
 
     def test_handle_speaking_bridges_disabled_open_speech(self):
         tab = Mock()
@@ -24,6 +36,7 @@ class SpeakingHandlerTests(unittest.TestCase):
              patch.object(auto, "click_text", return_value=0), \
              patch.object(auto.time, "sleep"):
             tab.js.side_effect = [
+                0,    # no Send-to-Teacher button
                 0,    # clicked start (disabled in DOM)
                 4,    # nav.setProgress invoked on task 4
             ]
@@ -35,6 +48,7 @@ class SpeakingHandlerTests(unittest.TestCase):
         with patch.object(auto, "q", return_value=0), \
              patch.object(auto, "click_text", return_value=0):
             tab.js.side_effect = [
+                0,     # no Send-to-Teacher button
                 0,     # start disabled
                 None,  # nav missing
             ]
