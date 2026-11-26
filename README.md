@@ -2,6 +2,8 @@
 
 Automated browser testing and exercise solver harness for English Discoveries courseware via Chrome DevTools Protocol (CDP) and multimodal LLMs.
 
+> **Reliability warning:** First-run behavior can differ across machines because browser versions, codecs, network access, login state, and LMS timing vary. The harness may stall or give wrong/incomplete answers; it does **not** guarantee 100% completion or scores. Run it with the `cover.py` supervisor in Agent Yield mode, monitor progress, and inspect/fix stalls instead of assuming a run succeeded. Use `--unattended` only for routine coverage when skipping a stalled item is acceptable. Do not use unattended/headless automation for graded Assessment Center exams.
+
 ## Pick the right mode first
 
 | You want to | Run | Why |

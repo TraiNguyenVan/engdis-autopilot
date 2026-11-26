@@ -33,6 +33,13 @@ Operational procedures for AI coding agents running, diagnosing, and repairing t
   candidate procedure is unverified here: no Assessment Center fixture or live-run
   evidence. Do not imply it is proven safe; require explicit authorization before
   any live graded submission.
+- For routine course work, use the `cover.py` supervisor in Agent Yield mode by
+  default. Monitor progress and inspect/fix stalls; neither `cover.py` nor the solver
+  guarantees 100% completion or scores. Reserve `--unattended` for practice/coverage
+  when skipping stalled tasks is acceptable.
+- Expect first-run friction across machines: visible Chrome/CDP availability,
+  browser codecs, login/session state, model endpoints, and LMS timing vary. Start
+  with a small non-critical run and confirm progress/results before scaling up.
 - When asked to write an Assessment Center prompt, put it in the repo
   `README.md` under `## Running with AI Agents`, distinct from the ungraded lesson
   test prompt. Keep it non-answering: user opens the exam in visible local Chrome;
