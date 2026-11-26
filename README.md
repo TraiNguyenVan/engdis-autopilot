@@ -11,7 +11,7 @@ In the example prompts below, replace placeholders with your details. If a requi
 | You want to | Run | Why |
 | :--- | :--- | :--- |
 | Lessons and practice, including **unit lesson tests** (not graded) | **Docker** (`docker compose run engdis`) or local | Headless is fine; lesson-test outcomes only affect unit completion percentage |
-| A **graded exam** — Assessment Center midterm/final | **Local visible browser**, opened and controlled by you | Do not automate answers or submission |
+| A **graded exam** — Assessment Center midterm/final | **Local visible browser**, exam opened by you, then `auto.py` on that page | `cover.py` cannot open it; monitor the run |
 
 If you have an Assessment Center exam, follow the **Assessment Center exam instructions immediately below**. Unit lesson tests are ungraded; Docker/automation is for practice and coverage only.
 
@@ -21,15 +21,15 @@ The courseware's scored assessment is the **Assessment Center exam** (midterm, f
 
 ### Assessment Center prompt
 
-Use this prompt for technical assistance only. The agent must not interact with exam content:
+This path is unverified in this repo: there is no Assessment Center fixture. Monitor the run and stop on a stall or an empty question; results are not guaranteed.
 
-> `/engdis-autopilot I have an Assessment Center <EXAM_TYPE> open in visible local Chrome. If any necessary details are unclear or missing, ask me first. Do not use cover.py, auto.py, Docker, headless mode, or unattended mode. Do not read or answer exam questions, select answers, advance through questions, or submit. You may only confirm the browser/login/connection is working and help with technical issues without interacting with assessment content. I will take and submit the exam myself.`
+> `/engdis-autopilot I have my Assessment Center <EXAM_TYPE> open in visible local Chrome on CDP port 9225. I explicitly authorize you to run the harness on this attempt. If any necessary details are unclear or missing, ask me first. Do not use cover.py, Docker, headless mode, or --unattended. Attach to the already-open exam tab with auto.py; monitor every question and verify an answer is registered before advancing. If a question is empty, the counter stalls, a reminder appears, or the page is ambiguous, stop without submitting and tell me what happened. Submit only after every question is visibly answered, report the score shown, then stop.`
 
 ### Assessment Center boundaries
 
 - The Assessment Center is separate from the unit/lesson tree. `cover.py` cannot open it.
 - This repo has no Assessment Center fixture or verified run. Unit lesson tests passing says nothing about Assessment Center behavior.
-- Keep the browser visible. The user operates the exam and submits it themselves; the agent may only assist with browser/login/connection issues without viewing or manipulating exam content.
+- Keep the browser visible, monitor the run, and stop on stalls or ambiguous questions. Explicit authorization is required for the attempt.
 - Do not include private score anecdotes or percentages in the public README or PR text.
 
 ---

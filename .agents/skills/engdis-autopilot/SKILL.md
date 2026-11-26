@@ -40,14 +40,12 @@ Operational procedures for AI coding agents running, diagnosing, and repairing t
 - Expect first-run friction across machines: visible Chrome/CDP availability,
   browser codecs, login/session state, model endpoints, and LMS timing vary. Start
   with a small non-critical run and confirm progress/results before scaling up.
-- When asked to write an Assessment Center prompt, put it in the repo
-  `README.md` under `## Running with AI Agents`, distinct from the ungraded lesson
-  test prompt. Keep it non-answering: user opens the exam in visible local Chrome;
-  the agent may confirm browser/login/connection and help with technical issues, but
-  must not answer exam questions, select answers, advance through questions, or
-  submit. No `cover.py`, Docker, headless or unattended mode. The user controls the
-  assessment and submits it themselves. Keep private score anecdotes and percentages
-  out of the public README and PR text.
+- The Assessment Center prompt belongs near the top of `README.md`, in its own
+  exam section. Use an `<EXAM_TYPE>` placeholder and ask for unclear details.
+  Require an explicitly authorized attempt, an already-open exam in visible local
+  Chrome, `auto.py` rather than `cover.py`, no unattended mode, and active monitoring.
+  Stop on an empty question, stalled counter, reminder, or ambiguity; submit only
+  after all answers are visibly registered. Do not imply the path is verified.
 
 ## Prerequisites
 
