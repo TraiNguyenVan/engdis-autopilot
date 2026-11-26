@@ -2,37 +2,116 @@
 
 Automated browser testing and exercise solver harness for English Discoveries courseware via Chrome DevTools Protocol (CDP) and multimodal LLMs.
 
-> **Recommended**: Use **Docker Compose**. Packages Chromium with required audio codecs, fake media streams, and memory limits out of the box.
+## Pick the right mode first
+
+| You want to | Run | Why |
+| :--- | :--- | :--- |
+| Practice/coverage work, overnight batches, unattended runs | **Docker** (`docker compose run engdis`) | Headless, reproducible, RAM-capped; nothing to watch, and stalls are skipped in `--unattended` |
+| A **graded test, midterm, or exam** | **Local headed browser** (`bootstrap_browser.py --headed`) | You must see the questions, the modals and the score screen; a silent skip is an unrecoverable wrong score |
+
+Everything below assumes you picked one of these two. The exam procedure is
+[here](#running-a-graded-test-or-exam); the Docker path starts at
+[Quickstart](#quickstart).
+
+---
+
+## Running a graded test or exam
+
+An exam is the one case where the harness must **stop** instead of carrying on.
+Three rules, in order of how much damage breaking them does:
+
+1. **Visible browser, on your own machine.** No `docker compose run`. The container
+   is `--headless=new`: an empty question area, a blocking reminder modal and the
+   score screen are all invisible, so a bad run looks identical to a good one until
+   the score lands.
+2. **Agent Yield mode, never `--unattended`.** Unattended mode is built to *skip*
+   a stalled item and finish the batch — on a test that means submitting blanks.
+   Agent mode exits `rc=6`, dumps `logs/fixtures/stuck_*.json` and leaves the test
+   unsubmitted, which is exactly what you want to debug.
+3. **Never re-submit a test that already has a score** — no `--force`, no
+   `--retest`, and do not chase a low `--min-score` on an exam lesson. A resubmit
+   **replaces** the recorded attempt; there is no undo.
+
+### Step 1 — start a visible browser
+
+```bash
+# keep the login in a dedicated profile; omit --headless via --headed
+python3 bootstrap_browser.py --headed --profile ~/.ed-profile
+```
+
+First run: log in by hand in that window. Later runs reuse the profile. If the
+exam includes **speaking**, launch Chrome yourself instead, because the bootstrap
+flags fake the microphone (`--use-fake-device-for-media-stream`) and a graded
+speaking item can be rejected by the server:
+
+```bash
+"$CHROME_BIN" --remote-debugging-port=9225 --user-data-dir=~/.ed-profile \
+  --no-sandbox --window-size=1400,1000 about:blank
+```
+
+### Step 2 — confirm the session before automating anything
+
+```bash
+python3 -c "import edlib, login; t = edlib.tab(); print(login.ensure_login(t), t.url)"
+```
+
+### Step 3 — drive only the test step, and watch the window
+
+```bash
+# <unit> is the 0-based unit index; 1 = one pass; --step=Test jumps straight there
+python3 cover.py <unit> 1 --course="Advanced 2" --lesson="<lesson name>" --step=Test
+```
+
+Use the exact step name from the lesson's step dropdown (usually `Test`). While it
+runs, watch for these and stop the run if you see them:
+
+- **Question counter not moving** (`1 / 12` staying at `1`) with an empty question
+  area → the item never loaded. Stop; do not submit. This is the exact failure that
+  produced a 48% submission.
+- **Reminder modal** — read it. It names the activity still missing ("You need to
+  complete the activity 1 to achieve progress in this step"). Complete that
+  activity; clicking Next through it does nothing.
+- **Listening questions** — the media plays at 16× so the step is quick; if the
+  score comes back ~40% the transcript never reached the model.
+- **Last question** — submit fires automatically on the final item. Watch the score
+  screen; do not let the run advance to the next lesson before you read it.
+
+A stall prints:
+
+```
+[AGENT-ACTION-REQUIRED]
+Task stalled on <lesson> (...)
+Fixture: logs/fixtures/stuck_*.json
+```
+
+Hand the fixture to your agent (or inspect it yourself) and fix the widget before
+re-running. Do not switch to `--unattended` to "get past" it.
+
+### Step 4 — stop cleanly after the score
+
+```bash
+touch STOP
+python3 tools/spikes/killpy.py cover.py
+python3 tools/spikes/killpy.py auto.py
+```
+
+The score is already saved server-side at that point. If it is lower than you
+expected, decide **before** retaking whether you are willing to replace the stored
+attempt — retaking is a new submission, not a repair.
+
+### Step 5 — ask an agent to do the watching
+
+The exam-specific prompts are in [Running with AI Agents](#running-with-ai-agents).
+The short version: tell the agent to use `--headed`, agent mode, a single lesson,
+`--step=Test`, and to stop on an empty question rather than submit.
 
 ---
 
 ## Quickstart
 
-> ### ⚠️ Graded tests and exams: run locally with a visible browser, not Docker
->
-> The Docker harness runs Chromium **headless** (`--headless=new`) with a fake
-> media device. Nothing is rendered where you can see it, so on a screen that
-> actually counts you cannot tell whether the test loaded, whether a question
-> rendered empty, whether a reminder modal is blocking the page, or whether the
-> score screen that came back is the one you wanted.
->
-> That blind mode is not harmless: a headless run of the Advanced 2 midterm test
-> submitted **48%** because the harness walked the test unanswered on an empty
-> practice area, and a re-submission **replaces** the score already recorded for
-> that attempt — there is no undo.
->
-> So for any test that counts:
->
-> - Run on your own machine with a **headed** browser you can watch, launched with
->   `--remote-debugging-port=9225` (no `--headless`, no `docker compose run`).
-> - Keep the window visible for the whole test step and watch the question
->   counter move. If it stalls on an empty question, stop and fix it instead of
->   submitting.
-> - Check the score on screen before advancing to the next lesson; do not retake a
->   test whose score is already recorded unless you intend to replace it.
->
-> Docker remains the right tool for unattended practice/coverage runs on lessons
-> whose scores you do not mind re-recording.
+> Running a graded test or exam? Stop here and use
+> [Running a graded test or exam](#running-a-graded-test-or-exam) — the Docker
+> path below is headless on purpose and will not show you the screen.
 
 ### 1. Setup
 ```bash
@@ -68,9 +147,19 @@ Copy-paste these prompts into your agent chat:
 - **Agent Yield Mode (Auto-Patch Stalls)**:
   > `/engdis-autopilot Run course "Advanced 2" unit 5 in agent mode. If stalled (rc=6), inspect the fixture in logs/fixtures/, patch solver.py, and resume.`
 
+- **Exam / graded test (local, visible browser)**:
+  > `/engdis-autopilot I have a graded test now: course "Advanced 2", lesson "<lesson name>". Start Chrome with --headed (do not use Docker), run only the Test step for that one lesson in agent mode, keep the window visible, and stop before submitting if any question renders empty or the counter stops moving. Report the score from the score screen, then stop.`
+  >
+  > Use this prompt as-is. It encodes the three rules that matter: `--headed`, no
+  > `--unattended`, one lesson with `--step=Test`. See
+  > [Running a graded test or exam](#running-a-graded-test-or-exam) for the manual
+  > equivalent.
+
 ---
 
-## Manual Execution (CLI Fallback)
+## Manual Execution
+
+### Docker (headless, practice and coverage work)
 
 If running without an AI agent:
 
@@ -85,6 +174,18 @@ docker exec engdis_inspect python3 cover.py 0-9 2 --course="Advanced 2" --unatte
 docker exec engdis_inspect python3 cover.py 2 1 --course="Advanced 2" --lesson="News" --unattended
 docker exec engdis_inspect python3 cover.py 5 1 --course="Advanced 2"  # Agent mode: exits rc=6 on stall
 ```
+
+### Local, headed browser (the exam path)
+
+```bash
+python3 bootstrap_browser.py --headed --profile ~/.ed-profile   # visible window, CDP on :9225
+python3 -c "import edlib, login; t = edlib.tab(); print(login.ensure_login(t), t.url)"
+python3 cover.py <unit> 1 --course="Advanced 2" --lesson="<lesson name>" --step=Test
+```
+
+Nothing in this path goes through Docker: a container renders offscreen, so an
+empty question, a reminder modal and the score screen are all invisible. Full
+procedure and the stop conditions: [Running a graded test or exam](#running-a-graded-test-or-exam).
 
 ---
 

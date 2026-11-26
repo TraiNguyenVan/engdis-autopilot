@@ -17,6 +17,18 @@ class TestBootstrapBrowser(unittest.TestCase):
         self.assertIn("--autoplay-policy=no-user-gesture-required", flags)
         self.assertEqual(flags[-1], "about:blank")
 
+    def test_chrome_flags_headed_mode_omits_headless(self):
+        """Exam runs need a visible window; --headed must drop --headless=new."""
+        flags = bootstrap_browser.build_chrome_flags(
+            chrome_bin="/usr/bin/chromium",
+            port=9225,
+            profile_dir="/tmp/profile",
+            headless=False
+        )
+        self.assertNotIn("--headless=new", flags)
+        self.assertIn("--remote-debugging-port=9225", flags)
+        self.assertEqual(flags[-1], "about:blank")
+
     @patch("urllib.request.urlopen")
     def test_wait_for_cdp_ready(self, mock_urlopen):
         mock_resp = MagicMock()
