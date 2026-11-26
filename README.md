@@ -7,7 +7,7 @@ Automated browser testing and exercise solver harness for English Discoveries co
 | You want to | Run | Why |
 | :--- | :--- | :--- |
 | Lessons, practice, and **unit lesson tests** (not graded) | **Docker** (`docker compose run engdis`) or local | Headless is fine; lesson tests only affect unit completion percentage |
-| A **graded exam** — Assessment Center midterm/final | **Local visible browser**, exam opened by you, then `auto.py` on that page | Only graded thing here. `cover.py` cannot open it, and a headless run is how the 48% happened |
+| A **graded exam** — Assessment Center midterm/final | **Local visible browser**, exam opened by you, then `auto.py` on that page | `cover.py` cannot open it; the DOM loop needs to be watched while the exam is active |
 
 The graded path is [Graded exams](#graded-exams-assessment-center-midterms-and-finals);
 everything else starts at [Quickstart](#quickstart).
@@ -20,11 +20,6 @@ The courseware's scored assessment is the **Assessment Center exam**
 (midterm, final, placement). **Unit lesson tests are not graded** — they only move a
 unit's completion percentage — and are covered
 [further down](#unit-lesson-tests-not-graded).
-
-Why this section exists: the Advanced 2 Midterm under our first one-shot run
-submitted **48%**, and the same midterm taken with the visible-browser DOM loop came
-back **100%**. Same solver, different way of driving it, so the difference is worth
-writing down.
 
 ### What works, and what does not
 
@@ -40,8 +35,7 @@ writing down.
 
 ### Procedure
 
-**1. Start a visible browser** (this is not optional — a headless run is how the 48%
-happened):
+**1. Start a visible browser** so you can monitor the question and score screens:
 
 ```bash
 python3 bootstrap_browser.py --headed --profile ~/.ed-profile
@@ -75,7 +69,7 @@ python3 status.py          # lesson|step|task|total|flags, one line per check
 **5. Watch for these and stop the run if you see them:**
 
 - **Counter stuck** (`1 / 12` staying at `1`) with an empty question area → the item
-  never loaded. Stop; do not submit. This is the exact failure behind the 48%.
+  never loaded. Stop; do not submit.
 - **A reminder/modal** — read it; it names what is still missing.
 - **Score screen** — the submit fires on the last question. Read the score before the
   loop moves on.
