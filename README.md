@@ -6,8 +6,8 @@ Automated browser testing and exercise solver harness for English Discoveries co
 
 | You want to | Run | Why |
 | :--- | :--- | :--- |
-| Lessons, practice, and **unit lesson tests** (not graded) | **Docker** (`docker compose run engdis`) or local | Headless is fine; lesson tests only affect unit completion percentage |
-| A **graded exam** — Assessment Center midterm/final | **Local visible browser**, exam opened by you, then `auto.py` on that page | `cover.py` cannot open it; the DOM loop needs to be watched while the exam is active |
+| Lessons and practice, including **unit lesson tests** (not graded) | **Docker** (`docker compose run engdis`) or local | Headless is fine; lesson-test outcomes only affect unit completion percentage |
+| A **graded exam** — Assessment Center midterm/final | **Local visible browser**, exam opened by you, then `auto.py` on that page | `cover.py` cannot open it; monitor the DOM loop while the exam is active |
 
 The graded path is [Graded exams](#graded-exams-assessment-center-midterms-and-finals);
 everything else starts at [Quickstart](#quickstart).
@@ -30,8 +30,8 @@ unit's completion percentage — and are covered
   the practice manager (`.prMCQ__qaSet`, the test pager,
   `.learning__submitTestLink`), which is why `auto.py` applies: it classifies tasks by
   DOM, not by lesson name.
-- **This path is unverified in this repo.** The 100% came from the handoff run on the
-  author's account; the test suite has no Assessment Center fixture.
+- **This path is unverified in this repo.** The handoff report is not evidence of
+  this branch's behavior; the test suite has no Assessment Center fixture.
 
 ### Procedure
 
@@ -107,9 +107,7 @@ Keep two habits even here:
 
 ## Quickstart
 
-> Running an **Assessment Center exam**? Read
-> [Graded exams](#graded-exams-assessment-center-midterms-and-finals) first —
-> the Docker path below is for lessons/coverage, not exams.
+> Running an **Assessment Center exam**? Read [Graded exams](#graded-exams-assessment-center-midterms-and-finals) first; Docker below is for lessons and coverage, not exams.
 
 ### 1. Setup
 ```bash
