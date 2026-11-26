@@ -184,17 +184,35 @@ def dom_transcript(t):
     })()""")
 
 
-def attach_transcript(t, src, label="--"):
+def _has_attached_transcript(src: str) -> bool:
+    """True only when an actual transcript block has already been attached."""
+    if not src:
+        return False
+    for marker in ("AUDIO TRANSCRIPT:", "[TRANSCRIPT]"):
+        idx = src.find(marker)
+        if idx >= 0 and src[idx + len(marker):].strip():
+            return True
+    return False
+
+
+def _media_cache_key(url: str) -> str:
+    """Extensionless filename stem used for transcript/media cache files."""
+    fname = (url or "").split("?", 1)[0].rsplit("/", 1)[-1]
+    stem, dot, _ext = fname.rpartition(".")
+    return stem if (dot and stem) else fname
+
+
+def attach_transcript(t, src, label="--", prefer_last_media=False):
     """Attach audio/video transcript from DOM or media ASR if not already in src."""
-    if "transcript" in (src or "").lower():
+    if _has_attached_transcript(src):
         return src
     dt = dom_transcript(t)
     if dt:
         print(f"{label} dom-transcript ({len(dt)} chars)", flush=True)
         return (src or "") + "\n\nAUDIO TRANSCRIPT:\n" + dt
-    u = media_url(t)
+    u = media_url(t, prefer_last=True) if prefer_last_media else media_url(t)
     if u:
-        key = u.rsplit("/", 1)[-1].split("?")[0]
+        key = _media_cache_key(u)
         try:
             tr = transcript_for(u, key)
         except Exception as e:
@@ -249,9 +267,17 @@ def play_media(t, timeout=45, quick=False):
     return False
 
 
-def media_url(t):
-    return t.js("""(() => {const a=[...document.querySelectorAll('audio,video')].filter(x=>x.src||x.currentSrc)[0];
-      return a? (a.currentSrc||a.src): null;})()""")
+def media_url(t, prefer_last=False):
+    pick_last = "1" if prefer_last else "0"
+    return t.js(f"""(() => {{
+      const pick = list => list.map(x => x.currentSrc || x.src).filter(Boolean);
+      const scoped = pick([...document.querySelectorAll(
+        'ed-la-resourcearea audio, ed-la-resourcearea video, ed-la-practicearea audio, ed-la-practicearea video, #pmContainer audio, #pmContainer video'
+      )]);
+      const urls = scoped.length ? scoped : pick([...document.querySelectorAll('audio,video')]);
+      if (!urls.length) return null;
+      return {pick_last} ? urls[urls.length - 1] : urls[0];
+    }})()""")
 
 
 def transcribe_groq(media_path: str) -> str:
@@ -296,8 +322,15 @@ def transcript_for(url, cache_key):
     os.makedirs(SCRATCH, exist_ok=True)
     path = os.path.join(SCRATCH, f"tr_{cache_key}.txt")
     if os.path.exists(path):
-        return open(path).read()
-    
+        with open(path, encoding="utf-8") as f:
+            return f.read()
+    fname = (url or "").split("?", 1)[0].rsplit("/", 1)[-1]
+    if fname and fname != cache_key:
+        legacy_path = os.path.join(SCRATCH, f"tr_{fname}.txt")
+        if os.path.exists(legacy_path):
+            with open(legacy_path, encoding="utf-8") as f:
+                return f.read()
+
     # Extract file extension from URL
     ext = ".mp3"
     clean_url = url.split("?")[0].lower()
@@ -305,7 +338,7 @@ def transcript_for(url, cache_key):
         if clean_url.endswith(e):
             ext = e
             break
-            
+
     media_file = os.path.join(SCRATCH, f"m_{cache_key}{ext}")
     if not os.path.exists(media_file):
         try:
@@ -315,7 +348,7 @@ def transcript_for(url, cache_key):
                     f.write(resp.read())
         except Exception as e:
             print(f"! failed to download media {url}: {e}", flush=True)
-            
+
     if not os.path.exists(media_file):
         return ""
 
@@ -324,12 +357,14 @@ def transcript_for(url, cache_key):
 
     # 2. Fall back to multimodal LLM input_audio if mp3
     if not txt and ext == ".mp3":
-        b64 = base64.b64encode(open(media_file, "rb").read()).decode()
+        with open(media_file, "rb") as f:
+            b64 = base64.b64encode(f.read()).decode()
         txt = ask("Transcribe this audio exactly. Output only the transcript.", audio_b64=b64, max_tokens=2000)
 
     if txt:
         try:
-            open(path, "w", encoding="utf-8").write(txt)
+            with open(path, "w", encoding="utf-8") as f:
+                f.write(txt)
         except Exception:
             pass
     return txt
@@ -1099,6 +1134,7 @@ def submit_test(t):
 def main(max_tasks=200):
     t = edlib.tab()
     last_lesson = None
+    lesson_resource = ""
     src = ""
     stuck = 0
     prev_sig = None
@@ -1116,8 +1152,9 @@ def main(max_tasks=200):
 
         if st["lesson"] != last_lesson:
             last_lesson = st["lesson"]
-            s = source_text(t)
-            src = (s["resource"] or "") + "\n" + s["body"]
+            s = source_text(t) or {}
+            lesson_resource = s.get("resource") or ""
+            src = lesson_resource + "\n" + (s.get("body") or "")
             print(f"== {st['lesson']} / {st['step']}")
 
         # step intro / test entry screens
@@ -1149,8 +1186,10 @@ def main(max_tasks=200):
             prev_sig = None
             continue
 
-        # audio/video comprehension task: make sure we have a transcript
-        src = attach_transcript(t, src)
+        # audio/video comprehension task: refresh per-task source and attach transcript
+        cur = source_text(t) or {}
+        res_txt = (cur.get("resource") or "").strip() or lesson_resource
+        task_src = attach_transcript(t, res_txt + "\n" + (cur.get("body") or ""))
 
         if stuck >= 3:
             # try switching step, then give up
@@ -1158,7 +1197,7 @@ def main(max_tasks=200):
             return
 
         neutralize(t)
-        out = do_task(t, src)
+        out = do_task(t, task_src)
         print(f"[{st['counter']}/{st['total']}] {out[:110]}")
         next_task(t)
         time.sleep(2.5)

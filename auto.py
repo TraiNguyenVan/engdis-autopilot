@@ -291,7 +291,7 @@ def handle_branch(t, src):
 def handle_test(t, src, unit_handler=None, lesson_name=""):
     """Answer a test question set, submit on the last one."""
     # Listening tests score 40% if answered blind; transcribe the audio once per test.
-    src = solver.attach_transcript(t, src, label="test")
+    src = solver.attach_transcript(t, src, label="test", prefer_last_media=True)
     out = None
     if unit_handler:
         out = unit_handler.on_task(t, {"type": "test", "src": src, "lesson": lesson_name})
@@ -458,6 +458,7 @@ def main(max_iter=120):
         print("LOGIN-FAIL")
         sys.exit(4)
     src = ""
+    lesson_resource = ""
     lesson = None
     prev = None
     stuck = 0
@@ -530,8 +531,9 @@ def main(max_iter=120):
             sys.exit(6)
         if s["lesson"] != lesson:
             lesson = s["lesson"]
-            d = solver.source_text(t)
-            src = (d["resource"] or "") + "\n" + d["body"]
+            d = solver.source_text(t) or {}
+            lesson_resource = d.get("resource") or ""
+            src = lesson_resource + "\n" + (d.get("body") or "")
             print(f"== {lesson} / {s['step']}")
 
         target_step_name = os.environ.get("ED_TARGET_STEP")
@@ -690,9 +692,10 @@ def main(max_iter=120):
             poll.wait_until(
                 lambda: q(t, """return document.querySelectorAll('.prMCQ__qaSet, .prFITB__qaSet, .dnditem, .lessonMultipleAnswer, .TTpanswerDiv, .openSpeech__btnStart, .speakingInteract, ed-la-mcq, .prDDL__qaSet, .prOpenEnded__qaSet').length ? 1 : 0;"""),
                 lambda v: v == 1, timeout=8.0, interval=0.25)
-            d = solver.source_text(t)
-            src = (d.get("resource") or "") + "\n" + (d.get("body") or "")
-            out = handle_test(t, src, unit_handler=unit_handler, lesson_name=s.get("lesson", ""))
+            d = solver.source_text(t) or {}
+            res_txt = (d.get("resource") or "").strip() or lesson_resource
+            task_src = res_txt + "\n" + (d.get("body") or "")
+            out = handle_test(t, task_src, unit_handler=unit_handler, lesson_name=s.get("lesson", ""))
         else:
             # intro / reading / interact intro / Step 1 Explore
             step_name = s.get("step", "").lower()
@@ -785,30 +788,31 @@ def main(max_iter=120):
                   return 'other';
                 })()""")
                 d = solver.source_text(t) or {}
-                src = (d.get("resource") or "") + "\n" + (d.get("body") or "")
+                res_txt = (d.get("resource") or "").strip() or lesson_resource
+                task_src = res_txt + "\n" + (d.get("body") or "")
                 if kind != "speak":
-                    src = solver.attach_transcript(t, src)
+                    task_src = solver.attach_transcript(t, task_src)
                 custom_out = None
                 if unit_handler:
-                    custom_out = unit_handler.on_task(t, {"type": kind, "src": src, "lesson": s.get("lesson", ""), "step": s.get("step", ""), "counter": s.get("counter")})
+                    custom_out = unit_handler.on_task(t, {"type": kind, "src": task_src, "lesson": s.get("lesson", ""), "step": s.get("step", ""), "counter": s.get("counter")})
                 if custom_out is not None:
                     out = custom_out
                 elif kind == "speak":
-                    out = handle_speaking(t, src)
+                    out = handle_speaking(t, task_src)
                     sk = ("speak", s["lesson"], s["step"], s["counter"])
                     speak_tries[sk] = speak_tries.get(sk, 0) + 1
                     if speak_tries[sk] >= 3:
                         print("SPEAK-BLOCKED", sk, flush=True)
                         sys.exit(3)
                 elif kind in ("mcq", "multi", "drag", "write", "select_text"):
-                    out = solver.do_task(t, src)
+                    out = solver.do_task(t, task_src)
                     # Click Check answer if present
                     if click_text(t, "Check answer") or click_text(t, "Check Answer"):
                         poll.wait_until(
                             lambda: q(t, "return document.querySelectorAll('.prMCQ__answers--checked').length;"),
                             lambda v: bool(v), timeout=3.0, interval=0.12)
                 else:
-                    out = solver.do_task(t, src)
+                    out = solver.do_task(t, task_src)
                     if out.startswith("other:"):
                         out = "other: " + s["body"][:80].replace("\n", " ")
 
