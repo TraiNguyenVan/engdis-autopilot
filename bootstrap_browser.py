@@ -8,10 +8,11 @@ import time
 import urllib.request
 import config
 
-def build_chrome_flags(chrome_bin: str, port: int, profile_dir: str) -> list[str]:
-    return [
-        chrome_bin,
-        "--headless=new",
+def build_chrome_flags(chrome_bin: str, port: int, profile_dir: str, headless: bool = True) -> list[str]:
+    flags = [chrome_bin]
+    if headless:
+        flags.append("--headless=new")
+    flags += [
         f"--remote-debugging-port={port}",
         f"--user-data-dir={profile_dir}",
         "--no-sandbox",
@@ -25,6 +26,7 @@ def build_chrome_flags(chrome_bin: str, port: int, profile_dir: str) -> list[str
         "--js-flags=--max-old-space-size=768",
         "about:blank"
     ]
+    return flags
 
 def clean_profile_locks(profile_dir: str):
     lock_patterns = ["SingletonLock", "SingletonCookie", "SingletonSocket", "DevToolsActivePort"]
@@ -69,12 +71,15 @@ def main():
     parser.add_argument("--port", type=int, default=config.CDP_PORT)
     parser.add_argument("--profile", default=_default_profile())
     parser.add_argument("--timeout", type=float, default=15.0)
+    parser.add_argument("--headed", action="store_true",
+                        help="open a visible browser window (use this for graded tests/exams); "
+                             "default is headless")
     args = parser.parse_args()
 
     os.makedirs(args.profile, exist_ok=True)
     clean_profile_locks(args.profile)
 
-    cmd = build_chrome_flags(config.CHROME_BIN, args.port, args.profile)
+    cmd = build_chrome_flags(config.CHROME_BIN, args.port, args.profile, headless=not args.headed)
     sys.stderr.write(f"[bootstrap] Launching: {' '.join(cmd)}\n")
     proc = subprocess.Popen(cmd)
 

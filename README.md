@@ -2,37 +2,114 @@
 
 Automated browser testing and exercise solver harness for English Discoveries courseware via Chrome DevTools Protocol (CDP) and multimodal LLMs.
 
-> **Recommended**: Use **Docker Compose**. Packages Chromium with required audio codecs, fake media streams, and memory limits out of the box.
+## Pick the right mode first
+
+| You want to | Run | Why |
+| :--- | :--- | :--- |
+| Lessons, practice, and **unit lesson tests** (not graded) | **Docker** (`docker compose run engdis`) or local | Headless is fine; lesson tests only affect unit completion percentage |
+| A **graded exam** — Assessment Center midterm/final | **Local visible browser**, exam opened by you, then `auto.py` on that page | `cover.py` cannot open it; the DOM loop needs to be watched while the exam is active |
+
+The graded path is [Graded exams](#graded-exams-assessment-center-midterms-and-finals);
+everything else starts at [Quickstart](#quickstart).
+
+---
+
+## Graded exams: Assessment Center midterms and finals
+
+The courseware's scored assessment is the **Assessment Center exam**
+(midterm, final, placement). **Unit lesson tests are not graded** — they only move a
+unit's completion percentage — and are covered
+[further down](#unit-lesson-tests-not-graded).
+
+### What works, and what does not
+
+- **`cover.py` cannot open an exam.** Its navigation walks
+  `.home__unitW` → `learningArea` → lesson; an Assessment Center exam is not a unit
+  lesson, so there is nothing to target.
+- **Once the exam is open, the widgets are the usual ones.** Questions render through
+  the practice manager (`.prMCQ__qaSet`, the test pager,
+  `.learning__submitTestLink`), which is why `auto.py` applies: it classifies tasks by
+  DOM, not by lesson name.
+- **This path is unverified in this repo.** The 100% came from the handoff run on the
+  author's account; the test suite has no Assessment Center fixture.
+
+### Procedure
+
+**1. Start a visible browser** so you can monitor the question and score screens:
+
+```bash
+python3 bootstrap_browser.py --headed --profile ~/.ed-profile
+```
+
+If the exam has a speaking item, launch Chrome yourself instead: the bootstrap flags
+include `--use-fake-device-for-media-stream` and a graded speaking answer can be
+rejected.
+
+```bash
+"$CHROME_BIN" --remote-debugging-port=9225 --user-data-dir=~/.ed-profile \
+  --no-sandbox --window-size=1400,1000 about:blank
+```
+
+**2. Confirm the session:**
+
+```bash
+python3 -c "import edlib, login; t = edlib.tab(); print(login.ensure_login(t), t.url)"
+```
+
+**3. Open the exam yourself** in that window and get to the first question. Do not
+ask `cover.py` to find it.
+
+**4. Run the loop against the open page, with the window in front of you:**
+
+```bash
+python3 auto.py 400        # max iterations; stop with Ctrl-C or the STOP file
+python3 status.py          # lesson|step|task|total|flags, one line per check
+```
+
+**5. Watch for these and stop the run if you see them:**
+
+- **Counter stuck** (`1 / 12` staying at `1`) with an empty question area → the item
+  never loaded. Stop; do not submit.
+- **A reminder/modal** — read it; it names what is still missing.
+- **Score screen** — the submit fires on the last question. Read the score before the
+  loop moves on.
+
+**6. Stop cleanly:**
+
+```bash
+touch STOP
+python3 tools/spikes/killpy.py auto.py
+```
+
+The score is already saved server-side. **A second submission replaces it — there is
+no undo**, so never re-run an exam "to fix" a score, and never use `--force`.
+
+## Unit lesson tests (not graded)
+
+Lesson tests only feed the unit's completion percentage. Headless Docker is fine for
+them; use `--headed` if you want to watch.
+
+```bash
+# <unit> is the 0-based unit index; 1 = one pass; this is NOT a graded exam
+python3 cover.py <unit> 1 --course="Advanced 2" --lesson="<lesson name>" --step=Test
+```
+
+In Docker, the same run is `ED_COURSE="Advanced 2" ED_UNITS="<unit>" docker compose run --rm engdis`.
+
+Keep two habits even here:
+
+- **Agent Yield mode by default**, `--unattended` only when you accept that a stalled
+  item is skipped.
+- **Don't retake a lesson test that already passed** unless you mean to replace the
+  percentage: no `--force`, no `--retest`, no chasing a low `--min-score`.
 
 ---
 
 ## Quickstart
 
-> ### ⚠️ Graded tests and exams: run locally with a visible browser, not Docker
->
-> The Docker harness runs Chromium **headless** (`--headless=new`) with a fake
-> media device. Nothing is rendered where you can see it, so on a screen that
-> actually counts you cannot tell whether the test loaded, whether a question
-> rendered empty, whether a reminder modal is blocking the page, or whether the
-> score screen that came back is the one you wanted.
->
-> That blind mode is not harmless: a headless run of the Advanced 2 midterm test
-> submitted **48%** because the harness walked the test unanswered on an empty
-> practice area, and a re-submission **replaces** the score already recorded for
-> that attempt — there is no undo.
->
-> So for any test that counts:
->
-> - Run on your own machine with a **headed** browser you can watch, launched with
->   `--remote-debugging-port=9225` (no `--headless`, no `docker compose run`).
-> - Keep the window visible for the whole test step and watch the question
->   counter move. If it stalls on an empty question, stop and fix it instead of
->   submitting.
-> - Check the score on screen before advancing to the next lesson; do not retake a
->   test whose score is already recorded unless you intend to replace it.
->
-> Docker remains the right tool for unattended practice/coverage runs on lessons
-> whose scores you do not mind re-recording.
+> Running an **Assessment Center exam**? Read
+> [Graded exams](#graded-exams-assessment-center-midterms-and-finals) first —
+> the Docker path below is for lessons/coverage, not exams.
 
 ### 1. Setup
 ```bash
@@ -68,9 +145,16 @@ Copy-paste these prompts into your agent chat:
 - **Agent Yield Mode (Auto-Patch Stalls)**:
   > `/engdis-autopilot Run course "Advanced 2" unit 5 in agent mode. If stalled (rc=6), inspect the fixture in logs/fixtures/, patch solver.py, and resume.`
 
+- **Unit lesson test (not graded)**:
+  > `/engdis-autopilot Run the unit lesson Test step for course "Advanced 2", unit 2, lesson "News". This only changes the unit completion percentage; it is not an Assessment Center exam. Docker is fine.`
+
+The first two prompts are for routine practice/coverage; `--unattended` means a stalled item is skipped. Do **not** use that prompt or mode for an Assessment Center exam.
+
 ---
 
-## Manual Execution (CLI Fallback)
+## Manual Execution
+
+### Docker (headless, practice and coverage work)
 
 If running without an AI agent:
 
@@ -85,6 +169,19 @@ docker exec engdis_inspect python3 cover.py 0-9 2 --course="Advanced 2" --unatte
 docker exec engdis_inspect python3 cover.py 2 1 --course="Advanced 2" --lesson="News" --unattended
 docker exec engdis_inspect python3 cover.py 5 1 --course="Advanced 2"  # Agent mode: exits rc=6 on stall
 ```
+
+### Local, headed browser (unit lesson tests — optional)
+
+```bash
+python3 bootstrap_browser.py --headed --profile ~/.ed-profile   # visible window, CDP on :9225
+python3 -c "import edlib, login; t = edlib.tab(); print(login.ensure_login(t), t.url)"
+python3 cover.py <unit> 1 --course="Advanced 2" --lesson="<lesson name>" --step=Test
+```
+
+This is still a **unit lesson test**, not an Assessment Center exam; it only affects
+the unit completion percentage. Docker is also fine when you do not need to watch
+the window. For a graded midterm/final, follow
+[Graded exams](#graded-exams-assessment-center-midterms-and-finals).
 
 ---
 
