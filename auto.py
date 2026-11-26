@@ -459,6 +459,7 @@ def main(max_iter=120):
         sys.exit(4)
     src = ""
     lesson_resource = ""
+    transcript_state = {}
     lesson = None
     prev = None
     stuck = 0
@@ -533,6 +534,7 @@ def main(max_iter=120):
             lesson = s["lesson"]
             d = solver.source_text(t) or {}
             lesson_resource = d.get("resource") or ""
+            transcript_state = {}
             src = lesson_resource + "\n" + (d.get("body") or "")
             print(f"== {lesson} / {s['step']}")
 
@@ -791,7 +793,9 @@ def main(max_iter=120):
                 res_txt = (d.get("resource") or "").strip() or lesson_resource
                 task_src = res_txt + "\n" + (d.get("body") or "")
                 if kind != "speak":
-                    task_src = solver.attach_transcript(t, task_src)
+                    task_src = solver.resolve_task_transcript(
+                        t, task_src, (s.get("lesson"), s.get("step")), transcript_state
+                    )
                 custom_out = None
                 if unit_handler:
                     custom_out = unit_handler.on_task(t, {"type": kind, "src": task_src, "lesson": s.get("lesson", ""), "step": s.get("step", ""), "counter": s.get("counter")})

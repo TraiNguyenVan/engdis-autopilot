@@ -184,22 +184,36 @@ def dom_transcript(t):
     })()""")
 
 
-def _has_attached_transcript(src: str) -> bool:
-    """True only when an actual transcript block has already been attached."""
+_TRANSCRIPT_BOUNDS = (
+    ("AUDIO TRANSCRIPT:", "[/AUDIO TRANSCRIPT]"),
+    ("[TRANSCRIPT]", "[/TRANSCRIPT]"),
+)
+
+
+def _extract_transcript_block(src: str) -> str:
+    """Return the bounded transcript block if present and non-empty, else ''."""
     if not src:
-        return False
-    for marker in ("AUDIO TRANSCRIPT:", "[TRANSCRIPT]"):
-        idx = src.find(marker)
-        if idx >= 0:
-            after = src[idx + len(marker):]
-            if after.startswith("\r\n"):
-                after = after[2:]
-            elif after.startswith("\n"):
-                after = after[1:]
-            first_line = after.splitlines()[0] if after.splitlines() else ""
-            if first_line.strip():
-                return True
-    return False
+        return ""
+    for start_m, end_m in _TRANSCRIPT_BOUNDS:
+        s_idx = src.find(start_m)
+        if s_idx < 0:
+            continue
+        content_start = s_idx + len(start_m)
+        e_idx = src.find(end_m, content_start)
+        if e_idx < 0:
+            continue
+        if src[content_start:e_idx].strip():
+            return src[s_idx:e_idx + len(end_m)]
+    return ""
+
+
+def _has_attached_transcript(src: str) -> bool:
+    """True only when a bounded, non-empty transcript block is attached."""
+    return bool(_extract_transcript_block(src))
+
+
+def _format_transcript_block(text: str) -> str:
+    return f"AUDIO TRANSCRIPT:\n{text.strip()}\n[/AUDIO TRANSCRIPT]"
 
 
 def _media_cache_key(url: str) -> str:
@@ -218,7 +232,7 @@ def attach_transcript(t, src, label="--", prefer_last_media=False):
     dt = dom_transcript(t)
     if dt:
         print(f"{label} dom-transcript ({len(dt)} chars)", flush=True)
-        return (src or "") + "\n\nAUDIO TRANSCRIPT:\n" + dt
+        return (src or "") + "\n\n" + _format_transcript_block(dt)
     u = media_url(t, prefer_last=True) if prefer_last_media else media_url(t)
     if u:
         key = _media_cache_key(u)
@@ -229,8 +243,23 @@ def attach_transcript(t, src, label="--", prefer_last_media=False):
             print(f"! transcript {key}: {str(e)[:140]}", flush=True)
         if tr:
             print(f"{label} transcript {key} ({len(tr)} chars)", flush=True)
-            return (src or "") + "\n\nAUDIO TRANSCRIPT:\n" + tr
+            return (src or "") + "\n\n" + _format_transcript_block(tr)
     return src
+
+
+def resolve_task_transcript(t, base_src, activity_key, retained_state, label="--", prefer_last_media=False):
+    """Attach transcript for the current task, retaining across questions in the same activity."""
+    if retained_state.get("key") != activity_key:
+        retained_state["key"] = activity_key
+        retained_state["block"] = ""
+    task_src = attach_transcript(t, base_src, label=label, prefer_last_media=prefer_last_media)
+    block = _extract_transcript_block(task_src)
+    if block:
+        retained_state["block"] = block
+        return task_src
+    if retained_state.get("block"):
+        return (base_src or "") + "\n\n" + retained_state["block"]
+    return task_src
 
 
 def play_media(t, timeout=45, quick=False):
@@ -279,12 +308,17 @@ def play_media(t, timeout=45, quick=False):
 def media_url(t, prefer_last=False):
     pick_last = "1" if prefer_last else "0"
     return t.js(f"""(() => {{
+      const isVis = el => !el.closest('.hide, [hidden]') && getComputedStyle(el).display !== 'none';
       const pick = list => list.map(x => x.currentSrc || x.src).filter(Boolean);
-      const all = pick([...document.querySelectorAll('audio,video')]);
-      const scoped = pick([...document.querySelectorAll(
-        'ed-la-resourcearea audio, ed-la-resourcearea video, ed-la-practicearea audio, ed-la-practicearea video, #pmContainer audio, #pmContainer video'
-      )]);
-      const urls = {pick_last} ? all : (scoped.length ? scoped : all);
+      const allEls = [...document.querySelectorAll('audio,video')];
+      const visEls = allEls.filter(isVis);
+      const pool = visEls.length ? visEls : allEls;
+      const practice = pick(pool.filter(x => x.closest('ed-la-practicearea, #pmContainer')));
+      const resource = pick(pool.filter(x => x.closest('ed-la-resourcearea')));
+      const all = pick(pool);
+      const urls = {pick_last}
+        ? all
+        : (practice.length ? practice : (resource.length ? resource : all));
       if (!urls.length) return null;
       return {pick_last} ? urls[urls.length - 1] : urls[0];
     }})()""")
@@ -334,20 +368,6 @@ def transcript_for(url, cache_key):
     if os.path.exists(path):
         with open(path, encoding="utf-8") as f:
             return f.read()
-    fname = (url or "").split("?", 1)[0].rsplit("/", 1)[-1]
-    stem, dot, _ext = fname.rpartition(".")
-    legacy_candidates = []
-    if fname:
-        legacy_candidates.append(fname)
-    if dot and stem:
-        legacy_candidates.append(stem)
-    for legacy_key in legacy_candidates:
-        if legacy_key != cache_key:
-            legacy_path = os.path.join(SCRATCH, f"tr_{legacy_key}.txt")
-            if os.path.exists(legacy_path):
-                with open(legacy_path, encoding="utf-8") as f:
-                    return f.read()
-
     # Extract file extension from URL
     ext = ".mp3"
     clean_url = url.split("?")[0].lower()
@@ -355,6 +375,25 @@ def transcript_for(url, cache_key):
         if clean_url.endswith(e):
             ext = e
             break
+
+    fname = (url or "").split("?", 1)[0].rsplit("/", 1)[-1]
+    stem, dot, _ext = fname.rpartition(".")
+    if fname and fname != cache_key:
+        legacy_path = os.path.join(SCRATCH, f"tr_{fname}.txt")
+        if os.path.exists(legacy_path):
+            with open(legacy_path, encoding="utf-8") as f:
+                return f.read()
+    if dot and stem and stem != cache_key:
+        legacy_stem_path = os.path.join(SCRATCH, f"tr_{stem}.txt")
+        if os.path.exists(legacy_stem_path):
+            expected_media = os.path.join(SCRATCH, f"m_{stem}{ext}")
+            conflicting = any(
+                e != ext and os.path.exists(os.path.join(SCRATCH, f"m_{stem}{e}"))
+                for e in (".mp4", ".m4a", ".wav", ".webm", ".mp3")
+            )
+            if os.path.exists(expected_media) and not conflicting:
+                with open(legacy_stem_path, encoding="utf-8") as f:
+                    return f.read()
 
     media_file = os.path.join(SCRATCH, f"m_{cache_key}{ext}")
     if not os.path.exists(media_file):
@@ -1152,7 +1191,7 @@ def main(max_tasks=200):
     t = edlib.tab()
     last_lesson = None
     lesson_resource = ""
-    lesson_transcript = ""
+    transcript_state = {}
     src = ""
     stuck = 0
     prev_sig = None
@@ -1172,7 +1211,7 @@ def main(max_tasks=200):
             last_lesson = st["lesson"]
             s = source_text(t) or {}
             lesson_resource = s.get("resource") or ""
-            lesson_transcript = ""
+            transcript_state = {}
             src = lesson_resource + "\n" + (s.get("body") or "")
             print(f"== {st['lesson']} / {st['step']}")
 
@@ -1209,13 +1248,9 @@ def main(max_tasks=200):
         cur = source_text(t) or {}
         res_txt = (cur.get("resource") or "").strip() or lesson_resource
         base_src = res_txt + "\n" + (cur.get("body") or "")
-        task_src = attach_transcript(t, base_src)
-        if _has_attached_transcript(task_src):
-            idx = task_src.find("AUDIO TRANSCRIPT:")
-            if idx >= 0:
-                lesson_transcript = task_src[idx:]
-        elif lesson_transcript:
-            task_src = base_src + "\n\n" + lesson_transcript
+        task_src = resolve_task_transcript(
+            t, base_src, (st.get("lesson"), st.get("step")), transcript_state
+        )
 
         if stuck >= 3:
             # try switching step, then give up

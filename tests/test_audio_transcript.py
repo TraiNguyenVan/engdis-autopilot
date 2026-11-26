@@ -11,7 +11,7 @@ import solver
 class AttachTranscriptTests(unittest.TestCase):
     def test_skips_when_audio_transcript_marker_has_content(self):
         tab = Mock()
-        src = "Question 1\n\nAUDIO TRANSCRIPT:\nAlready here"
+        src = "Question 1\n\nAUDIO TRANSCRIPT:\nAlready here\n[/AUDIO TRANSCRIPT]"
         with patch.object(solver, "dom_transcript") as mock_dom, \
              patch.object(solver, "media_url") as mock_url, \
              patch.object(solver, "transcript_for") as mock_tr:
@@ -23,7 +23,7 @@ class AttachTranscriptTests(unittest.TestCase):
 
     def test_skips_when_legacy_bracket_transcript_marker_has_content(self):
         tab = Mock()
-        src = "[TRANSCRIPT]\nLegacy transcript text\n\nQuestion 1"
+        src = "[TRANSCRIPT]\nLegacy transcript text\n[/TRANSCRIPT]\n\nQuestion 1"
         with patch.object(solver, "dom_transcript") as mock_dom, \
              patch.object(solver, "media_url") as mock_url, \
              patch.object(solver, "transcript_for") as mock_tr:
@@ -55,10 +55,12 @@ class AttachTranscriptTests(unittest.TestCase):
         for prompt in (
             "[TRANSCRIPT]\n\nQuestion 1: What did the speaker say?",
             "AUDIO TRANSCRIPT:\n\nQuestion 1: What did the speaker say?",
+            "[TRANSCRIPT]\nQuestion 1: What did the speaker say?",
+            "AUDIO TRANSCRIPT:\nQuestion 1: What did the speaker say?",
         ):
             with patch.object(solver, "dom_transcript", return_value="Recovered DOM text"):
                 out = solver.attach_transcript(tab, prompt)
-            self.assertIn("AUDIO TRANSCRIPT:\nRecovered DOM text", out)
+            self.assertIn("AUDIO TRANSCRIPT:\nRecovered DOM text\n[/AUDIO TRANSCRIPT]", out)
 
     def test_attaches_dom_transcript_without_media_fallback(self):
         tab = Mock()
@@ -108,9 +110,9 @@ class AttachTranscriptTests(unittest.TestCase):
         tab = FakeTab()
         solver.media_url(tab)
         solver.media_url(tab, prefer_last=True)
-        self.assertIn("const urls = 0 ? all : (scoped.length ? scoped : all);", seen_js[0])
+        self.assertIn("practice.length ? practice : (resource.length ? resource : all)", seen_js[0])
         self.assertIn("return 0 ? urls[urls.length - 1] : urls[0];", seen_js[0])
-        self.assertIn("const urls = 1 ? all : (scoped.length ? scoped : all);", seen_js[1])
+        self.assertIn("const visEls = allEls.filter(isVis);", seen_js[1])
         self.assertIn("return 1 ? urls[urls.length - 1] : urls[0];", seen_js[1])
 
     def test_handles_transcript_for_exception_gracefully(self):
@@ -142,14 +144,34 @@ class TranscriptCacheCompatibilityTests(unittest.TestCase):
         self.assertEqual(out_mp4, "Cached mp4 transcript")
         mock_open.assert_not_called()
 
-    def test_reads_legacy_extensionless_cache_without_download(self):
+    def test_reads_verified_legacy_extensionless_cache_without_download(self):
         with open(os.path.join(self.tmp, "tr_clip99.txt"), "w", encoding="utf-8") as f:
             f.write("Cached stem transcript")
+        with open(os.path.join(self.tmp, "m_clip99.mp3"), "wb") as f:
+            f.write(b"mp3data")
         with patch.object(solver, "SCRATCH", self.tmp), \
              patch.object(solver.urllib.request, "urlopen") as mock_open:
             out = solver.transcript_for("https://cdn.example.com/a/clip99.mp3?token=1", "clip99_mp3")
         self.assertEqual(out, "Cached stem transcript")
         mock_open.assert_not_called()
+
+    def test_ignores_ambiguous_legacy_extensionless_cache_for_other_media_type(self):
+        with open(os.path.join(self.tmp, "tr_clip99.txt"), "w", encoding="utf-8") as f:
+            f.write("Cached mp3 transcript")
+        with open(os.path.join(self.tmp, "m_clip99.mp3"), "wb") as f:
+            f.write(b"mp3data")
+        with patch.object(solver, "SCRATCH", self.tmp), \
+             patch.object(solver.urllib.request, "urlopen", side_effect=OSError("offline")):
+            out = solver.transcript_for("https://cdn.example.com/v/clip99.mp4?token=1", "clip99_mp4")
+        self.assertEqual(out, "")
+
+    def test_ignores_unverified_legacy_extensionless_cache(self):
+        with open(os.path.join(self.tmp, "tr_clip99.txt"), "w", encoding="utf-8") as f:
+            f.write("Orphan stem transcript")
+        with patch.object(solver, "SCRATCH", self.tmp), \
+             patch.object(solver.urllib.request, "urlopen", side_effect=OSError("offline")):
+            out = solver.transcript_for("https://cdn.example.com/a/clip99.mp3", "clip99_mp3")
+        self.assertEqual(out, "")
 
     def test_reads_legacy_filename_with_extension_cache_without_download(self):
         with open(os.path.join(self.tmp, "tr_clip99.mp3.txt"), "w", encoding="utf-8") as f:
@@ -279,9 +301,68 @@ class AutoTranscriptIntegrationTests(unittest.TestCase):
         self.assertIn("Explore passage context", seen[0])
         self.assertIn("AUDIO TRANSCRIPT:\nASR practice audio", seen[0])
 
+    def test_main_practice_retains_transcript_across_questions_and_clears_on_step_change(self):
+        states = [
+            {"unit": "U1", "lesson": "L1", "step": "Step 2: Practice", "counter": "1", "total": "2", "body": "Q1"},
+            {"unit": "U1", "lesson": "L1", "step": "Step 2: Practice", "counter": "2", "total": "2", "body": "Q2"},
+            {"unit": "U1", "lesson": "L1", "step": "Step 3: Reading", "counter": "1", "total": "1", "body": "Q3"},
+        ]
+        seen = self._run_practice_iteration(
+            None,
+            None,
+            "",
+            source_side_effect=[
+                {"resource": "R1", "body": "Init"},
+                {"resource": "R1", "body": "Q1"},
+                {"resource": "R1", "body": "Q2"},
+                {"resource": "R3", "body": "Q3"},
+            ],
+            max_iter=3,
+            states=states,
+        )
+        # Re-run with DOM transcript present only on Q1
+        class Tab:
+            def js(self, expr):
+                if expr == auto.IS_TEST_JS:
+                    return 0
+                if "return 'mcq'" in expr:
+                    return "mcq"
+                return 0
+
+        seen2 = []
+        with patch.object(auto.edlib, "tab", return_value=Tab()), \
+             patch.object(auto.login, "ensure_login", return_value=True), \
+             patch.object(auto, "st", side_effect=states), \
+             patch.object(auto, "update_live_status"), \
+             patch.object(auto, "q", return_value=0), \
+             patch.object(auto, "poll") as poll_mock, \
+             patch.object(auto, "handle_branch", return_value=None), \
+             patch.object(auto, "click_text", return_value=False), \
+             patch.object(auto, "advance", return_value=True), \
+             patch.object(auto.solver, "source_text", side_effect=[
+                 {"resource": "R1", "body": "Init"},
+                 {"resource": "R1", "body": "Q1"},
+                 {"resource": "R1", "body": "Q2"},
+                 {"resource": "R3", "body": "Q3"},
+             ]), \
+             patch.object(auto.solver, "dom_transcript", side_effect=["Shared practice audio", None, None]), \
+             patch.object(auto.solver, "media_url", return_value=None), \
+             patch.object(auto.solver, "do_task", side_effect=lambda _t, s: (seen2.append(s), "mcq: 1/1")[1]), \
+             patch.object(auto.solver, "neutralize"), \
+             patch.object(auto.time, "sleep"), \
+             patch.dict("os.environ", {"ED_TARGET_STEP": "", "ED_UNATTENDED": "", "ED_LESSON_LOCK": ""}):
+            poll_mock.wait_until.return_value = 1
+            auto.main(max_iter=3)
+
+        self.assertEqual(len(seen), 3)
+        self.assertEqual(len(seen2), 3)
+        self.assertIn("AUDIO TRANSCRIPT:\nShared practice audio", seen2[0])
+        self.assertIn("AUDIO TRANSCRIPT:\nShared practice audio", seen2[1])
+        self.assertNotIn("Shared practice audio", seen2[2])
+
 
 class SolverMainTranscriptTests(unittest.TestCase):
-    def test_solver_main_keeps_lesson_transcript_when_media_disappears_on_next_task(self):
+    def test_solver_main_keeps_lesson_transcript_within_step_and_clears_on_step_change(self):
         class Tab:
             def js(self, expr):
                 return ""
@@ -289,7 +370,7 @@ class SolverMainTranscriptTests(unittest.TestCase):
         states = [
             {"url": "https://lms.example.com/lesson", "lesson": "L1", "step": "Step 2", "counter": "1", "total": "2"},
             {"url": "https://lms.example.com/lesson", "lesson": "L1", "step": "Step 2", "counter": "2", "total": "2"},
-            {"url": "https://lms.example.com/lesson", "lesson": "L2", "step": "Step 2", "counter": "1", "total": "1"},
+            {"url": "https://lms.example.com/lesson", "lesson": "L1", "step": "Step 3", "counter": "1", "total": "1"},
         ]
         seen = []
 
@@ -303,8 +384,7 @@ class SolverMainTranscriptTests(unittest.TestCase):
                  {"resource": "R1", "body": "Init"},
                  {"resource": "R1", "body": "Q1"},
                  {"resource": "R1", "body": "Q2"},
-                 {"resource": "R2", "body": "Init L2"},
-                 {"resource": "R2", "body": "Q1 L2"},
+                 {"resource": "R2", "body": "Q1 Step 3"},
              ]), \
              patch.object(solver, "dom_transcript", side_effect=["Shared L1 transcript", None, None]), \
              patch.object(solver, "media_url", return_value=None), \
@@ -319,6 +399,20 @@ class SolverMainTranscriptTests(unittest.TestCase):
         self.assertIn("AUDIO TRANSCRIPT:\nShared L1 transcript", seen[0])
         self.assertIn("AUDIO TRANSCRIPT:\nShared L1 transcript", seen[1])
         self.assertNotIn("Shared L1 transcript", seen[2])
+
+    def test_resolve_task_transcript_retains_bounded_legacy_bracket_transcript(self):
+        tab = Mock()
+        state = {}
+        with patch.object(solver, "dom_transcript", return_value=None), \
+             patch.object(solver, "media_url", return_value=None):
+            s1 = solver.resolve_task_transcript(
+                tab, "[TRANSCRIPT]\nLegacy bounded audio\n[/TRANSCRIPT]\n\nQ1", ("L1", "Step 2"), state
+            )
+            s2 = solver.resolve_task_transcript(tab, "Q2", ("L1", "Step 2"), state)
+            s3 = solver.resolve_task_transcript(tab, "Q3", ("L1", "Step 3"), state)
+        self.assertIn("Legacy bounded audio", s1)
+        self.assertIn("Legacy bounded audio", s2)
+        self.assertNotIn("Legacy bounded audio", s3)
 
 
 if __name__ == "__main__":
