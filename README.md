@@ -7,18 +7,20 @@ Automated browser testing and exercise solver harness for English Discoveries co
 | You want to | Run | Why |
 | :--- | :--- | :--- |
 | Practice/coverage work, overnight batches, unattended runs | **Docker** (`docker compose run engdis`) | Headless, reproducible, RAM-capped; nothing to watch, and stalls are skipped in `--unattended` |
-| A **graded test, midterm, or exam** | **Local headed browser** (`bootstrap_browser.py --headed`) | You must see the questions, the modals and the score screen; a silent skip is an unrecoverable wrong score |
+| A **lesson test inside a unit** that counts | **Local headed browser** (`bootstrap_browser.py --headed`) | You must see the questions, the modals and the score screen; a silent skip is an unrecoverable wrong score |
+| An **Assessment Center midterm/final** | **Open it yourself**, then run the DOM loop locally with `--headed` | `cover.py` cannot open it (no unit/lesson node), but the questions use the same test widgets, so `auto.py` applies once the exam is open. Unverified in this repo — see [Assessment Center](#assessment-center-midterms-and-finals-eg-advanced-2-midterm) |
 
-Everything below assumes you picked one of these two. The exam procedure is
-[here](#running-a-graded-test-or-exam); the Docker path starts at
+Everything below assumes you picked one of these. Lesson tests are covered in
+[Running a lesson test that counts](#running-a-test-that-counts);
+the Assessment Center case is explained right below it. Docker starts at
 [Quickstart](#quickstart).
 
 ---
 
-## Running a graded test or exam
+## Running a test that counts
 
-An exam is the one case where the harness must **stop** instead of carrying on.
-Three rules, in order of how much damage breaking them does:
+A scored test is where the harness must **stop** instead of carrying on. Three
+rules, in order of how much damage breaking them does:
 
 1. **Visible browser, on your own machine.** No `docker compose run`. The container
    is `--headless=new`: an empty question area, a blocking reminder modal and the
@@ -29,8 +31,11 @@ Three rules, in order of how much damage breaking them does:
    Agent mode exits `rc=6`, dumps `logs/fixtures/stuck_*.json` and leaves the test
    unsubmitted, which is exactly what you want to debug.
 3. **Never re-submit a test that already has a score** — no `--force`, no
-   `--retest`, and do not chase a low `--min-score` on an exam lesson. A resubmit
+   `--retest`, and do not chase a low `--min-score` on a scored lesson. A resubmit
    **replaces** the recorded attempt; there is no undo.
+
+The steps below are the **unit lesson** path (`cover.py` can open it). The
+**Assessment Center** path — midterm/final — is at the end of this section.
 
 ### Step 1 — start a visible browser
 
@@ -40,7 +45,7 @@ python3 bootstrap_browser.py --headed --profile ~/.ed-profile
 ```
 
 First run: log in by hand in that window. Later runs reuse the profile. If the
-exam includes **speaking**, launch Chrome yourself instead, because the bootstrap
+test includes **speaking**, launch Chrome yourself instead, because the bootstrap
 flags fake the microphone (`--use-fake-device-for-media-stream`) and a graded
 speaking item can be rejected by the server:
 
@@ -101,17 +106,48 @@ attempt — retaking is a new submission, not a repair.
 
 ### Step 5 — ask an agent to do the watching
 
-The exam-specific prompts are in [Running with AI Agents](#running-with-ai-agents).
+The test-specific prompts are in [Running with AI Agents](#running-with-ai-agents).
 The short version: tell the agent to use `--headed`, agent mode, a single lesson,
 `--step=Test`, and to stop on an empty question rather than submit.
+
+### Assessment Center midterms and finals (e.g. Advanced 2 Midterm)
+
+This is the case the warning exists for. The Advanced 2 Midterm under our first
+one-shot run submitted **48%**; the same midterm taken with the upstream handoff
+code — visible browser, DOM loop, nothing skipped — came back **100%**. It is not a
+unit lesson, so the difference is entirely in how it is driven, not in the solver.
+
+- **Not in the course tree.** There is no unit/lesson node, so `cover.py` cannot
+  open it: its navigation walks `.home__unitW` → `learningArea` → lesson. Open the
+  exam yourself from the Assessment Center, log in, and get to the first question.
+- **The screens are the same widgets.** Once the exam is open, the questions render
+  through the practice manager (`.prMCQ__qaSet`, the test pager,
+  `.learning__submitTestLink`), so `auto.py`'s DOM classification applies — it
+  identifies tasks by DOM, not by lesson name. Run it against the already-open tab:
+
+  ```bash
+  # exam already open in the visible browser; this walks the questions on that page
+  python3 auto.py 400
+  ```
+
+  Check `status.py` for the `lesson|step|task|total|flags` line as it goes; there is
+  no `--lesson=` target here, so the loop has no unit boundary to protect it.
+- **Unverified in this repo.** The 100% came from the handoff run on the author's
+  account, not from a run of this branch, and there is no Assessment Center fixture
+  in the test suite. The guards have to be manual: visible browser, agent mode (never
+  `--unattended`, never `docker compose run`), watch every question, and stop rather
+  than submit if the counter stalls on an empty question.
+- **Before you start, know the cost of a bad run.** The 48% happened because nobody
+  was watching: the loop ran to the end and submitted. A second submission is not a
+  repair — it replaces the recorded attempt.
 
 ---
 
 ## Quickstart
 
-> Running a graded test or exam? Stop here and use
-> [Running a graded test or exam](#running-a-graded-test-or-exam) — the Docker
-> path below is headless on purpose and will not show you the screen.
+> Running a lesson test that counts, or an Assessment Center exam? Read
+> [Running a lesson test that counts](#running-a-test-that-counts) first —
+> the Docker path below is headless on purpose and will not show you the screen.
 
 ### 1. Setup
 ```bash
@@ -147,13 +183,16 @@ Copy-paste these prompts into your agent chat:
 - **Agent Yield Mode (Auto-Patch Stalls)**:
   > `/engdis-autopilot Run course "Advanced 2" unit 5 in agent mode. If stalled (rc=6), inspect the fixture in logs/fixtures/, patch solver.py, and resume.`
 
-- **Exam / graded test (local, visible browser)**:
-  > `/engdis-autopilot I have a graded test now: course "Advanced 2", lesson "<lesson name>". Start Chrome with --headed (do not use Docker), run only the Test step for that one lesson in agent mode, keep the window visible, and stop before submitting if any question renders empty or the counter stops moving. Report the score from the score screen, then stop.`
+- **Lesson test that counts (local, visible browser)**:
+  > `/engdis-autopilot I have a scored lesson test now: course "Advanced 2", lesson "<lesson name>". Start Chrome with --headed (do not use Docker), run only the Test step for that one lesson in agent mode, keep the window visible, and stop before submitting if any question renders empty or the counter stops moving. Report the score from the score screen, then stop.`
   >
   > Use this prompt as-is. It encodes the three rules that matter: `--headed`, no
   > `--unattended`, one lesson with `--step=Test`. See
-  > [Running a graded test or exam](#running-a-graded-test-or-exam) for the manual
-  > equivalent.
+  > [Running a lesson test that counts](#running-a-test-that-counts) for the
+  > manual equivalent.
+
+- **Assessment Center midterm/final**:
+  > `/engdis-autopilot I have an Assessment Center exam open in a visible Chrome on port 9225. Do not use cover.py — it cannot open an exam. Drive the questions on the open page with auto.py, keep the window visible, and stop before submitting if a question renders empty or the counter stalls. Report the score from the score screen, then stop.`
 
 ---
 
@@ -175,7 +214,7 @@ docker exec engdis_inspect python3 cover.py 2 1 --course="Advanced 2" --lesson="
 docker exec engdis_inspect python3 cover.py 5 1 --course="Advanced 2"  # Agent mode: exits rc=6 on stall
 ```
 
-### Local, headed browser (the exam path)
+### Local, headed browser (scored lesson tests)
 
 ```bash
 python3 bootstrap_browser.py --headed --profile ~/.ed-profile   # visible window, CDP on :9225
@@ -185,7 +224,7 @@ python3 cover.py <unit> 1 --course="Advanced 2" --lesson="<lesson name>" --step=
 
 Nothing in this path goes through Docker: a container renders offscreen, so an
 empty question, a reminder modal and the score screen are all invisible. Full
-procedure and the stop conditions: [Running a graded test or exam](#running-a-graded-test-or-exam).
+procedure and the stop conditions: [Running a lesson test that counts](#running-a-test-that-counts).
 
 ---
 
