@@ -42,8 +42,8 @@ def next_task(t):
 
 def rects(t):
     return t.js("""(() => ({
-      items:[...document.querySelectorAll('.dnditem')].map(e=>({t:e.innerText.trim(), cx:e.getBoundingClientRect().x+e.getBoundingClientRect().width/2, cy:e.getBoundingClientRect().y+e.getBoundingClientRect().height/2})),
-      zones:[...document.querySelectorAll('.dndZone')].map(e=>({n:e.getAttribute('dg_name'), cx:e.getBoundingClientRect().x+e.getBoundingClientRect().width/2, cy:e.getBoundingClientRect().y+e.getBoundingClientRect().height/2, count:e.querySelectorAll('.dnditem').length}))
+      items:[...document.querySelectorAll('.dnditem')].map(e=>{const r=e.getBoundingClientRect(); return {t:e.innerText.trim(), cx:r.x+r.width/2, cy:r.y+r.height/2, w:r.width, h:r.height};}),
+      zones:[...document.querySelectorAll('.dndZone')].map(e=>{const r=e.getBoundingClientRect(); return {n:e.getAttribute('dg_name'), id:e.id||'', cx:r.x+r.width/2, cy:r.y+r.height/2, w:r.width, h:r.height, count:e.querySelectorAll('.dnditem').length};})
     }))()""")
 
 def drag_match(t, pairs):

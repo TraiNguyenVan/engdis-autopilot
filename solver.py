@@ -184,6 +184,91 @@ def dom_transcript(t):
     })()""")
 
 
+_TRANSCRIPT_BOUNDS = (
+    ("AUDIO TRANSCRIPT:", "[/AUDIO TRANSCRIPT]"),
+    ("[TRANSCRIPT]", "[/TRANSCRIPT]"),
+)
+
+
+def _extract_transcript_block(src: str) -> str:
+    """Return the bounded transcript block if present and non-empty, else ''."""
+    if not src:
+        return ""
+    for start_m, end_m in _TRANSCRIPT_BOUNDS:
+        s_idx = src.find(start_m)
+        if s_idx < 0:
+            continue
+        content_start = s_idx + len(start_m)
+        e_idx = src.find(end_m, content_start)
+        if e_idx < 0:
+            continue
+        if src[content_start:e_idx].strip():
+            return src[s_idx:e_idx + len(end_m)]
+    return ""
+
+
+def _has_attached_transcript(src: str) -> bool:
+    """True only when a bounded, non-empty transcript block is attached."""
+    return bool(_extract_transcript_block(src))
+
+
+def _format_transcript_block(text: str) -> str:
+    return f"AUDIO TRANSCRIPT:\n{text.strip()}\n[/AUDIO TRANSCRIPT]"
+
+
+def _media_cache_key(url: str) -> str:
+    """Media-distinguishing cache key (stem_ext) without double extensions."""
+    fname = (url or "").split("?", 1)[0].rsplit("/", 1)[-1]
+    stem, dot, ext = fname.rpartition(".")
+    if dot and stem and ext:
+        return f"{stem}_{ext.lower()}"
+    return fname
+
+
+def attach_transcript(t, src, label="--", prefer_last_media=False):
+    """Attach audio/video transcript from DOM or media ASR if not already in src."""
+    if _has_attached_transcript(src):
+        return src
+    dt = dom_transcript(t)
+    if dt:
+        print(f"{label} dom-transcript ({len(dt)} chars)", flush=True)
+        return (src or "") + "\n\n" + _format_transcript_block(dt)
+    u = media_url(t, prefer_last=True) if prefer_last_media else media_url(t)
+    if u:
+        key = _media_cache_key(u)
+        try:
+            tr = transcript_for(u, key)
+        except Exception as e:
+            tr = ""
+            print(f"! transcript {key}: {str(e)[:140]}", flush=True)
+        if tr:
+            print(f"{label} transcript {key} ({len(tr)} chars)", flush=True)
+            return (src or "") + "\n\n" + _format_transcript_block(tr)
+    return src
+
+
+def resolve_task_transcript(t, base_src, activity_key, retained_state, label="--", prefer_last_media=False):
+    """Attach transcript for the current task, retaining across questions in the same activity."""
+    if retained_state.get("key") != activity_key:
+        retained_state["key"] = activity_key
+        retained_state["block"] = ""
+        retained_state["media"] = None
+    cur_media = media_url(t, prefer_last=True) if prefer_last_media else media_url(t)
+    task_src = attach_transcript(t, base_src, label=label, prefer_last_media=prefer_last_media)
+    block = _extract_transcript_block(task_src)
+    if block:
+        retained_state["block"] = block
+        retained_state["media"] = cur_media
+        return task_src
+    if cur_media and cur_media != retained_state.get("media"):
+        retained_state["block"] = ""
+        retained_state["media"] = cur_media
+        return task_src
+    if retained_state.get("block"):
+        return (base_src or "") + "\n\n" + retained_state["block"]
+    return task_src
+
+
 def play_media(t, timeout=45, quick=False):
     """Click play button and accelerate playback at 16x speed to complete and trigger server beacon."""
     present = t.js("""(() => [...document.querySelectorAll('audio,video')].filter(x=>(x.currentSrc||x.src)).length)()""")
@@ -227,9 +312,23 @@ def play_media(t, timeout=45, quick=False):
     return False
 
 
-def media_url(t):
-    return t.js("""(() => {const a=[...document.querySelectorAll('audio,video')].filter(x=>x.src||x.currentSrc)[0];
-      return a? (a.currentSrc||a.src): null;})()""")
+def media_url(t, prefer_last=False):
+    pick_last = "1" if prefer_last else "0"
+    return t.js(f"""(() => {{
+      const isVis = el => !el.closest('.hide, [hidden]') && getComputedStyle(el).display !== 'none';
+      const pick = list => list.map(x => x.currentSrc || x.src).filter(Boolean);
+      const srcEls = [...document.querySelectorAll('audio,video')].filter(x => x.currentSrc || x.src);
+      const visEls = srcEls.filter(isVis);
+      const pool = visEls.length ? visEls : srcEls;
+      const practice = pick(pool.filter(x => x.closest('ed-la-practicearea, #pmContainer')));
+      const resource = pick(pool.filter(x => x.closest('ed-la-resourcearea')));
+      const all = pick(pool);
+      const urls = {pick_last}
+        ? all
+        : (practice.length ? practice : (resource.length ? resource : all));
+      if (!urls.length) return null;
+      return {pick_last} ? urls[urls.length - 1] : urls[0];
+    }})()""")
 
 
 def transcribe_groq(media_path: str) -> str:
@@ -274,8 +373,8 @@ def transcript_for(url, cache_key):
     os.makedirs(SCRATCH, exist_ok=True)
     path = os.path.join(SCRATCH, f"tr_{cache_key}.txt")
     if os.path.exists(path):
-        return open(path).read()
-    
+        with open(path, encoding="utf-8") as f:
+            return f.read()
     # Extract file extension from URL
     ext = ".mp3"
     clean_url = url.split("?")[0].lower()
@@ -283,7 +382,26 @@ def transcript_for(url, cache_key):
         if clean_url.endswith(e):
             ext = e
             break
-            
+
+    fname = (url or "").split("?", 1)[0].rsplit("/", 1)[-1]
+    stem, dot, _ext = fname.rpartition(".")
+    if fname and fname != cache_key:
+        legacy_path = os.path.join(SCRATCH, f"tr_{fname}.txt")
+        if os.path.exists(legacy_path):
+            with open(legacy_path, encoding="utf-8") as f:
+                return f.read()
+    if dot and stem and stem != cache_key:
+        legacy_stem_path = os.path.join(SCRATCH, f"tr_{stem}.txt")
+        if os.path.exists(legacy_stem_path):
+            expected_media = os.path.join(SCRATCH, f"m_{stem}{ext}")
+            conflicting = any(
+                e != ext and os.path.exists(os.path.join(SCRATCH, f"m_{stem}{e}"))
+                for e in (".mp4", ".m4a", ".wav", ".webm", ".mp3")
+            )
+            if os.path.exists(expected_media) and not conflicting:
+                with open(legacy_stem_path, encoding="utf-8") as f:
+                    return f.read()
+
     media_file = os.path.join(SCRATCH, f"m_{cache_key}{ext}")
     if not os.path.exists(media_file):
         try:
@@ -293,7 +411,7 @@ def transcript_for(url, cache_key):
                     f.write(resp.read())
         except Exception as e:
             print(f"! failed to download media {url}: {e}", flush=True)
-            
+
     if not os.path.exists(media_file):
         return ""
 
@@ -302,12 +420,14 @@ def transcript_for(url, cache_key):
 
     # 2. Fall back to multimodal LLM input_audio if mp3
     if not txt and ext == ".mp3":
-        b64 = base64.b64encode(open(media_file, "rb").read()).decode()
+        with open(media_file, "rb") as f:
+            b64 = base64.b64encode(f.read()).decode()
         txt = ask("Transcribe this audio exactly. Output only the transcript.", audio_b64=b64, max_tokens=2000)
 
     if txt:
         try:
-            open(path, "w", encoding="utf-8").write(txt)
+            with open(path, "w", encoding="utf-8") as f:
+                f.write(txt)
         except Exception:
             pass
     return txt
@@ -353,8 +473,284 @@ def solve_multi(t, src):
     return "multi: " + ", ".join(items[i - 1]["t"][:30] for i in idx)
 
 
+_BANK_ZONE = "TTpTablePlaceHolder"
+_BANK_ZONE_SEL = f'.dndZone[dg_name="{_BANK_ZONE}"], .dndZone#{_BANK_ZONE}'
+_DRAG_DROP_OFFSETS = ((0, 0), (-25, 0), (25, 0), (0, -4), (0, 4), (0, 8))
+
+
+def _is_bank_zone(z):
+    return isinstance(z, dict) and (z.get("n") == _BANK_ZONE or z.get("id") == _BANK_ZONE)
+
+
+def _clamp_drop_offset(z, dx, dy, fallback_box=None):
+    if dx:
+        w = z.get("w") if z.get("w") is not None else z.get("width")
+        if w is None and isinstance(fallback_box, dict):
+            w = fallback_box.get("w")
+        if isinstance(w, (int, float)) and not isinstance(w, bool) and w > 0:
+            max_dx = max(0.0, w / 2.0 - min(4.0, w / 4.0))
+            dx = max(-max_dx, min(max_dx, dx))
+    return dx, dy
+
+
+def _endpoints_reachable(item, tx, ty, meta):
+    if not isinstance(meta, dict):
+        return True
+    if meta.get("sourceInView") is False or meta.get("targetInView") is False:
+        return False
+    vw, vh = meta.get("vw"), meta.get("vh")
+    if isinstance(vw, (int, float)) and not isinstance(vw, bool) and vw > 0:
+        if item["cx"] < 0 or item["cx"] >= vw or tx < 0 or tx >= vw:
+            return False
+    if isinstance(vh, (int, float)) and not isinstance(vh, bool) and vh > 0:
+        if item["cy"] < 0 or item["cy"] >= vh or ty < 0 or ty >= vh:
+            return False
+    return True
+
+
+def _too_far_for_offsets(item, z, meta):
+    if not isinstance(meta, dict):
+        return False
+    if meta.get("unreachable") is True:
+        return True
+    vw, vh = meta.get("vw"), meta.get("vh")
+    if isinstance(vh, (int, float)) and not isinstance(vh, bool) and vh > 0:
+        if z["cy"] - 8 >= vh or z["cy"] + 8 < 0 or abs(z["cy"] - item["cy"]) > vh + 8:
+            return True
+    if isinstance(vw, (int, float)) and not isinstance(vw, bool) and vw > 0:
+        if z["cx"] - 25 >= vw or z["cx"] + 25 < 0 or abs(z["cx"] - item["cx"]) > vw + 25:
+            return True
+    return False
+
+
+def _scroll_drag_into_view(t, zone_sel, word, dx=0, dy=0):
+    meta = t.js("""(() => {
+      const want = %s.toLowerCase();
+      const z = document.querySelector(%s);
+      const reqDx = %s, reqDy = %s;
+      const items = [...document.querySelectorAll('.dnditem')];
+      const it = items.find(e => e.innerText.trim().toLowerCase() === want)
+              || items.find(e => e.innerText.toLowerCase().includes(want));
+      const vh = () => {
+        const ih = window.innerHeight || 0;
+        const ch = (document.documentElement && document.documentElement.clientHeight) || 0;
+        return (ih > 0 && ch > 0) ? Math.min(ih, ch) : (ih || ch || 800);
+      };
+      const vw = () => {
+        const iw = window.innerWidth || 0;
+        const cw = (document.documentElement && document.documentElement.clientWidth) || 0;
+        return (iw > 0 && cw > 0) ? Math.min(iw, cw) : (iw || cw || 1280);
+      };
+      const clipsAxis = val => /^(hidden|scroll|auto|clip)$/.test(val || '');
+      const ancestorClipFlags = cur => {
+        if (typeof window.getComputedStyle === 'function') {
+          const cs = window.getComputedStyle(cur);
+          if (cs && (cs.display === 'none' || cs.visibility === 'hidden')) return { hidden: true, cx: true, cy: true };
+          return {
+            hidden: false,
+            cx: clipsAxis(cs && (cs.overflowX || cs.overflow)),
+            cy: clipsAxis(cs && (cs.overflowY || cs.overflow))
+          };
+        }
+        return {
+          hidden: false,
+          cx: (cur.clientWidth > 0 && cur.scrollWidth > cur.clientWidth) || clipsAxis(cur.overflowX || cur.overflow),
+          cy: (cur.clientHeight > 0 && cur.scrollHeight > cur.clientHeight) || clipsAxis(cur.overflowY || cur.overflow)
+        };
+      };
+      const visibleBoundsFor = el => {
+        let left = 0, top = 0, right = vw(), bottom = vh();
+        let cur = el ? el.parentElement : null;
+        while (cur && cur !== document.documentElement) {
+          const fl = ancestorClipFlags(cur);
+          if (fl.hidden) return { left: 0, top: 0, right: 0, bottom: 0 };
+          if ((fl.cx || fl.cy) && typeof cur.getBoundingClientRect === 'function') {
+            const cr = cur.getBoundingClientRect();
+            const cl = cr.left + (cur.clientLeft || 0);
+            const ct = cr.top + (cur.clientTop || 0);
+            const cRight = cur.clientWidth > 0 ? (cl + cur.clientWidth) : cr.right;
+            const cBot = cur.clientHeight > 0 ? (ct + cur.clientHeight) : cr.bottom;
+            if (fl.cx) { left = Math.max(left, cl); right = Math.min(right, cRight); }
+            if (fl.cy) { top = Math.max(top, ct); bottom = Math.min(bottom, cBot); }
+          }
+          cur = cur.parentElement;
+        }
+        return { left, top, right, bottom };
+      };
+      const isPointVisible = (el, px, py) => {
+        if (!el || typeof el.getBoundingClientRect !== 'function') return false;
+        if (typeof window.getComputedStyle === 'function') {
+          const es = window.getComputedStyle(el);
+          if (es && (es.display === 'none' || es.visibility === 'hidden' || parseFloat(es.opacity) === 0)) return false;
+        }
+        const r = el.getBoundingClientRect();
+        if (r.width <= 0 || r.height <= 0) return false;
+        const b = visibleBoundsFor(el);
+        if (b.right <= b.left || b.bottom <= b.top) return false;
+        if (px < b.left || px >= b.right || py < b.top || py >= b.bottom) return false;
+        const zx = r.width > 2 ? Math.max(r.left + 1, Math.min(r.right - 1, px)) : (r.left + r.width / 2);
+        const zy = r.height > 2 ? Math.max(r.top + 1, Math.min(r.bottom - 1, py)) : (r.top + r.height / 2);
+        if (zx < b.left || zx >= b.right || zy < b.top || zy >= b.bottom) return false;
+        if (typeof document.elementFromPoint === 'function') {
+          const hit = document.elementFromPoint(zx, zy);
+          if (!hit) return false;
+          if (hit !== el && !(typeof el.contains === 'function' && el.contains(hit))) return false;
+        }
+        return true;
+      };
+      const scrollByDelta = (el, dx, dy) => {
+        let moved = false;
+        let cur = el ? el.parentElement : null;
+        while (cur && cur !== document.body && cur !== document.documentElement) {
+          if (dy && cur.scrollHeight > cur.clientHeight) {
+            const b = cur.scrollTop;
+            cur.scrollTop += dy;
+            if (cur.scrollTop !== b) moved = true;
+          }
+          if (dx && cur.scrollWidth > cur.clientWidth) {
+            const b = cur.scrollLeft;
+            cur.scrollLeft += dx;
+            if (cur.scrollLeft !== b) moved = true;
+          }
+          cur = cur.parentElement;
+        }
+        if ((dx || dy) && typeof window.scrollBy === 'function') {
+          const bx = window.scrollX || window.pageXOffset || 0;
+          const by = window.scrollY || window.pageYOffset || 0;
+          window.scrollBy(dx, dy);
+          const ax = window.scrollX || window.pageXOffset || 0;
+          const ay = window.scrollY || window.pageYOffset || 0;
+          if (ax !== bx || ay !== by) moved = true;
+        }
+        return moved;
+      };
+      const evalEndpoints = () => {
+        const ir = it ? it.getBoundingClientRect() : null;
+        const zr = z ? z.getBoundingClientRect() : null;
+        let cdx = reqDx, cdy = reqDy;
+        if (cdx && zr && zr.width > 0) {
+          const mx = Math.max(0, zr.width / 2 - Math.min(4, zr.width / 4));
+          cdx = Math.max(-mx, Math.min(mx, cdx));
+        }
+        const sx = ir ? ir.left + ir.width / 2 : 0;
+        const sy = ir ? ir.top + ir.height / 2 : 0;
+        const tx = zr ? zr.left + zr.width / 2 + cdx : 0;
+        const ty = zr ? zr.top + zr.height / 2 + cdy : 0;
+        return {
+          ir, zr, sx, sy, tx, ty,
+          srcOk: it ? isPointVisible(it, sx, sy) : false,
+          tgtOk: z ? isPointVisible(z, tx, ty) : false
+        };
+      };
+
+      let ep = evalEndpoints();
+      if (!it || !z || (ep.srcOk && ep.tgtOk)) {
+        return {
+          scrolled: 0,
+          w: ep.zr ? ep.zr.width : null,
+          h: ep.zr ? ep.zr.height : null,
+          vw: vw(),
+          vh: vh(),
+          sourceInView: ep.srcOk,
+          targetInView: ep.tgtOk,
+          unreachable: (!it || !z) ? true : false
+        };
+      }
+
+      let scrolled = 0;
+      if (!ep.srcOk && typeof it.scrollIntoView === 'function') {
+        it.scrollIntoView({block: 'nearest', inline: 'nearest'});
+        scrolled = 1;
+        ep = evalEndpoints();
+      }
+      if (!ep.tgtOk && typeof z.scrollIntoView === 'function') {
+        z.scrollIntoView({block: 'nearest', inline: 'nearest'});
+        scrolled = 1;
+        ep = evalEndpoints();
+      }
+      if (!ep.srcOk || !ep.tgtOk) {
+        let bLeft = 0, bTop = 0, bRight = vw(), bBot = vh();
+        let anc = it ? it.parentElement : null;
+        while (anc && anc !== document.documentElement) {
+          if (typeof anc.contains === 'function' && anc.contains(z)) {
+            const fl = ancestorClipFlags(anc);
+            if ((fl.cx || fl.cy) && typeof anc.getBoundingClientRect === 'function') {
+              const cr = anc.getBoundingClientRect();
+              const cl = cr.left + (anc.clientLeft || 0), ct = cr.top + (anc.clientTop || 0);
+              const cRight = anc.clientWidth > 0 ? (cl + anc.clientWidth) : cr.right;
+              const cBot = anc.clientHeight > 0 ? (ct + anc.clientHeight) : cr.bottom;
+              if (fl.cx) { bLeft = Math.max(bLeft, cl); bRight = Math.min(bRight, cRight); }
+              if (fl.cy) { bTop = Math.max(bTop, ct); bBot = Math.min(bBot, cBot); }
+            }
+          }
+          anc = anc.parentElement;
+        }
+        const availW = bRight - bLeft, availH = bBot - bTop;
+        let dxS = 0, dyS = 0;
+        if (availH > 0) {
+          const minTop = Math.min(ep.ir.top, ep.zr.top), maxBot = Math.max(ep.ir.bottom, ep.zr.bottom);
+          const minPy = Math.min(ep.sy, ep.ty), maxPy = Math.max(ep.sy, ep.ty);
+          if (maxBot - minTop <= availH) {
+            if (minTop < bTop) dyS = minTop - bTop;
+            else if (maxBot > bBot) dyS = maxBot - bBot;
+          } else if (maxPy - minPy <= availH - 2) {
+            if (minPy < bTop + 1) dyS = minPy - (bTop + 1);
+            else if (maxPy > bBot - 1) dyS = maxPy - (bBot - 1);
+          }
+        }
+        if (availW > 0) {
+          const minLeft = Math.min(ep.ir.left, ep.zr.left), maxRight = Math.max(ep.ir.right, ep.zr.right);
+          const minPx = Math.min(ep.sx, ep.tx), maxPx = Math.max(ep.sx, ep.tx);
+          if (maxRight - minLeft <= availW) {
+            if (minLeft < bLeft) dxS = minLeft - bLeft;
+            else if (maxRight > bRight) dxS = maxRight - bRight;
+          } else if (maxPx - minPx <= availW - 2) {
+            if (minPx < bLeft + 1) dxS = minPx - (bLeft + 1);
+            else if (maxPx > bRight - 1) dxS = maxPx - (bRight - 1);
+          }
+        }
+        const moved = (dxS || dyS) ? scrollByDelta(it, dxS, dyS) : false;
+        if (moved) {
+          scrolled = 1;
+          ep = evalEndpoints();
+        }
+        if (!ep.srcOk && typeof it.scrollIntoView === 'function') {
+          const fitsBoth = availH > 0 && availW > 0
+            && (Math.max(ep.sy, ep.ty) - Math.min(ep.sy, ep.ty)) <= availH - 2
+            && (Math.max(ep.sx, ep.tx) - Math.min(ep.sx, ep.tx)) <= availW - 2;
+          if ((!moved && fitsBoth) || !ep.srcOk) {
+            it.scrollIntoView({block: 'nearest', inline: 'nearest'});
+            scrolled = 1;
+            ep = evalEndpoints();
+          }
+        }
+      }
+
+      const tb = visibleBoundsFor(z);
+      const zBoxCanReach = !!ep.zr && tb.right > tb.left && tb.bottom > tb.top
+        && (ep.zr.right + 25) > tb.left && (ep.zr.left - 25) < tb.right
+        && (ep.zr.bottom + 8) > tb.top && (ep.zr.top - 8) < tb.bottom;
+      const unreachable = !ep.srcOk || (!ep.tgtOk && !zBoxCanReach);
+
+      return {
+        scrolled: scrolled,
+        w: ep.zr ? ep.zr.width : null,
+        h: ep.zr ? ep.zr.height : null,
+        vw: vw(),
+        vh: vh(),
+        sourceInView: ep.srcOk,
+        targetInView: ep.tgtOk,
+        unreachable: unreachable
+      };
+    })()""" % (json.dumps(str(word).strip()), json.dumps(zone_sel), json.dumps(dx), json.dumps(dy)))
+    if isinstance(meta, dict) and meta.get("scrolled") == 1:
+        time.sleep(0.1)
+    return meta if isinstance(meta, dict) else None
+
+
 def _drag_snapshot(t):
     res = t.js("""(() => {
+      const isBank = z => z.getAttribute('dg_name') === 'TTpTablePlaceHolder' || z.id === 'TTpTablePlaceHolder';
       const zones = [...document.querySelectorAll('.dndZone')].map(z => {
         let label = '';
         const row = z.closest('.prMT_T2T__answersRow, .prSeq__zone--txt, tr, .answersRow');
@@ -364,12 +760,14 @@ def _drag_snapshot(t):
         }
         return {
           n: z.getAttribute('dg_name'),
+          id: z.id || '',
           label: label,
           items: [...z.querySelectorAll('.dnditem')].map(x => x.innerText.trim())
         };
       });
-      const b = [...document.querySelectorAll('.dndZone')].find(z => z.getAttribute('dg_name') === 'TTpTablePlaceHolder');
-      const bank = b ? [...b.querySelectorAll('.dnditem')].map(x => x.innerText.trim()) : [];
+      const bank = [...document.querySelectorAll('.dndZone')]
+        .filter(isBank)
+        .flatMap(b => [...b.querySelectorAll('.dnditem')].map(x => x.innerText.trim()));
       return { zones: zones, bank: bank };
     })()""") or {}
     return res.get("zones", []), res.get("bank", [])
@@ -377,21 +775,25 @@ def _drag_snapshot(t):
 
 def solve_drag(t, src):
     zones, bank = _drag_snapshot(t)
-    target_zones = [z for z in zones if z["n"] != "TTpTablePlaceHolder"]
+    target_zones = [z for z in zones if not _is_bank_zone(z)]
+    bank_sel = f'{_BANK_ZONE_SEL}, #{_BANK_ZONE}'
     if target_zones and all(z["items"] for z in target_zones):
         print("-- drag: zones pre-filled; clearing and re-dropping")
+        moved_to_bank = False
         for z in target_zones:
             for item_text in z["items"]:
+                bmeta = _scroll_drag_into_view(t, bank_sel, item_text)
                 rr = edlib.rects(t)
                 it = next((i for i in rr["items"] if i["t"].strip() == item_text.strip()), None)
-                bz = next((zz for zz in rr["zones"] if zz["n"] == "TTpTablePlaceHolder"), None)
-                if not it or not bz:
+                bz = next((zz for zz in rr["zones"] if _is_bank_zone(zz)), None)
+                if not it or not bz or not _endpoints_reachable(it, bz["cx"], bz["cy"], bmeta):
                     continue
                 t.drag_xy(it["cx"], it["cy"], bz["cx"], bz["cy"])
+                moved_to_bank = True
                 time.sleep(0.5)
         zones, bank = _drag_snapshot(t)
-        target_zones = [z for z in zones if z["n"] != "TTpTablePlaceHolder"]
-        if target_zones and all(z["items"] for z in target_zones):
+        target_zones = [z for z in zones if not _is_bank_zone(z)]
+        if moved_to_bank and target_zones and all(z["items"] for z in target_zones):
             return "drag: already"
     prompt = t.js("""(() => {
       const p = document.querySelector('ed-la-matching, ed-la-practicearea, .learning__angPracticeW, .practicearea');
@@ -410,19 +812,22 @@ def solve_drag(t, src):
         r = ask_json(q, max_tokens=2000)
         mapping = (r or {}).get("map", {})
     if not mapping:
-        return "drag: EMPTY-MAP"
+        return "other: drag: EMPTY-MAP"
     # clear zones whose current item is not the desired one
-    bank_zone = "TTpTablePlaceHolder"
     for zid, word in mapping.items():
+        zid = str(zid)
+        if _is_bank_zone({"n": zid, "id": zid}):
+            continue
         cur = t.js(f"""(() => {{const z=document.querySelector('.dndZone[dg_name="{zid}"]'); return z? [...z.querySelectorAll('.dnditem')].map(x=>x.innerText.trim()):[];}})()""")
         for item_text in (cur or []):
             if str(word).strip().lower() in item_text.lower():
                 continue
             for _ in range(3):
+                bmeta = _scroll_drag_into_view(t, bank_sel, item_text)
                 rr = edlib.rects(t)
                 it = next((i for i in rr["items"] if i["t"].strip() == item_text.strip()), None)
-                bz = next((z for z in rr["zones"] if z["n"] == bank_zone), None)
-                if not it or not bz:
+                bz = next((z for z in rr["zones"] if _is_bank_zone(z)), None)
+                if not it or not bz or not _endpoints_reachable(it, bz["cx"], bz["cy"], bmeta):
                     break
                 t.drag_xy(it["cx"], it["cy"], bz["cx"], bz["cy"])
                 time.sleep(0.7)
@@ -430,8 +835,13 @@ def solve_drag(t, src):
     done = []
     for zid, word in mapping.items():
         zid = str(zid)
+        if _is_bank_zone({"n": zid, "id": zid}):
+            continue
         ok = False
-        for attempt in range(4):
+        unreachable = False
+        zone_sel = f'.dndZone[dg_name="{zid}"]'
+        for dx, dy in _DRAG_DROP_OFFSETS:
+            meta = _scroll_drag_into_view(t, zone_sel, word, dx=dx, dy=dy)
             rects = edlib.rects(t)
             item = next((i for i in rects["items"] if i["t"].strip().lower() == str(word).strip().lower()), None)
             if not item:
@@ -439,16 +849,28 @@ def solve_drag(t, src):
             z = next((x for x in rects["zones"] if x["n"] == zid), None)
             if not item or not z:
                 break
-            t.drag_xy(item["cx"], item["cy"], z["cx"], z["cy"] + (attempt - 1) * 4)
+            cdx, cdy = _clamp_drop_offset(z, dx, dy, fallback_box=meta)
+            tx, ty = z["cx"] + cdx, z["cy"] + cdy
+            if not _endpoints_reachable(item, tx, ty, meta):
+                unreachable = True
+                if _too_far_for_offsets(item, z, meta):
+                    break
+                continue
+            unreachable = False
+            t.drag_xy(item["cx"], item["cy"], tx, ty)
             time.sleep(0.8)
             now = t.js(f"""(() => {{const z=document.querySelector('.dndZone[dg_name="{zid}"]');
               return z? [...z.querySelectorAll('.dnditem')].map(x=>x.innerText.trim()):[];}})()""")
             if any(str(word).strip().lower() in x.lower() for x in (now or [])):
                 ok = True
                 break
-        done.append(f"{zid}={'ok' if ok else 'FAIL'}")
+        status = "ok" if ok else ("UNREACHABLE" if unreachable else "FAIL")
+        done.append(f"{zid}={status}")
 
-    return "drag: " + " ".join(done)
+    summary = "drag: " + " ".join(done)
+    if not done or any(not d.endswith("=ok") for d in done):
+        return "other: " + summary
+    return summary
 
 
 
@@ -465,7 +887,7 @@ def solve_sequence(t, src):
       const seen = new Set();
       for (const z of zones) {
         const n = z.getAttribute('dg_name');
-        if (!n || n === 'TTpTablePlaceHolder' || seen.has(n)) continue;
+        if (!n || n === 'TTpTablePlaceHolder' || z.id === 'TTpTablePlaceHolder' || seen.has(n)) continue;
         seen.add(n);
         const item = z.querySelector('.dnditem');
         unique.push({
@@ -939,7 +1361,7 @@ def do_task(t, src):
       if(document.querySelectorAll('.lessonMultipleAnswer').length) return 'multi';
       if(document.querySelector('.sequenceZone, .prSeq__zone--txt, .prSeqImg__zone, .sequenceZoneWrapper')) return 'sequence';
       if(document.querySelectorAll('.dnditem').length && document.querySelectorAll('.dndZone').length) {
-        if(!document.querySelector('.dndZone[dg_name="TTpTablePlaceHolder"]')) return 'sequence';
+        if(!document.querySelector('.dndZone[dg_name="TTpTablePlaceHolder"], .dndZone#TTpTablePlaceHolder')) return 'sequence';
         return 'drag';
       }
       if(document.querySelectorAll('.TTpanswerDiv').length && document.querySelectorAll('.draggable').length) return 'lcloze';
@@ -1077,6 +1499,8 @@ def submit_test(t):
 def main(max_tasks=200):
     t = edlib.tab()
     last_lesson = None
+    lesson_resource = ""
+    transcript_state = {}
     src = ""
     stuck = 0
     prev_sig = None
@@ -1094,8 +1518,10 @@ def main(max_tasks=200):
 
         if st["lesson"] != last_lesson:
             last_lesson = st["lesson"]
-            s = source_text(t)
-            src = (s["resource"] or "") + "\n" + s["body"]
+            s = source_text(t) or {}
+            lesson_resource = s.get("resource") or ""
+            transcript_state = {}
+            src = lesson_resource + "\n" + (s.get("body") or "")
             print(f"== {st['lesson']} / {st['step']}")
 
         # step intro / test entry screens
@@ -1127,20 +1553,13 @@ def main(max_tasks=200):
             prev_sig = None
             continue
 
-        # audio/video comprehension task: make sure we have a transcript
-        if "transcript" not in src.lower():
-            dt = dom_transcript(t)
-            if dt:
-                src += "\n\nAUDIO TRANSCRIPT:\n" + dt
-                print(f"-- dom-transcript ({len(dt)} chars)")
-            else:
-                u = media_url(t)
-                if u:
-                    key = u.rsplit("/", 1)[-1].split("?")[0]
-                    tr = transcript_for(u, key)
-                    if tr:
-                        src += "\n\nAUDIO TRANSCRIPT:\n" + tr
-                        print(f"-- transcript {key} ({len(tr)} chars)")
+        # audio/video comprehension task: refresh per-task source and attach transcript
+        cur = source_text(t) or {}
+        res_txt = (cur.get("resource") or "").strip() or lesson_resource
+        base_src = res_txt + "\n" + (cur.get("body") or "")
+        task_src = resolve_task_transcript(
+            t, base_src, (st.get("lesson"), st.get("step")), transcript_state
+        )
 
         if stuck >= 3:
             # try switching step, then give up
@@ -1148,7 +1567,7 @@ def main(max_tasks=200):
             return
 
         neutralize(t)
-        out = do_task(t, src)
+        out = do_task(t, task_src)
         print(f"[{st['counter']}/{st['total']}] {out[:110]}")
         next_task(t)
         time.sleep(2.5)
