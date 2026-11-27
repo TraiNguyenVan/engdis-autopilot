@@ -38,13 +38,14 @@ class TestAnswerGuard(unittest.TestCase):
     def test_main_does_not_advance_unanswered_test(self):
         class Tab:
             def js(self, script):
-                if 'if (app?.isTestEnv)' in script:
+                if script == auto.IS_TEST_JS:
                     return True
                 return 0
 
         state = {'unit': 'Unit 1', 'lesson': 'L', 'step': 'Test',
                  'counter': '1', 'total': '2', 'body': ''}
-        with patch.object(auto.edlib, 'tab', return_value=Tab()), \
+        with patch.object(auto, 'GuardedTab', new=lambda tab, assessment_mode: tab), \
+             patch.object(auto.edlib, 'tab', return_value=Tab()), \
              patch.object(auto.login, 'ensure_login', return_value=True), \
              patch.object(auto, 'st', return_value=state), \
              patch.object(auto, 'update_live_status'), \

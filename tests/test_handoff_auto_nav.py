@@ -340,7 +340,8 @@ class MainTestFlowTests(unittest.TestCase):
             events.append("test")
             return "test-submit"
 
-        with patch.object(auto, "edlib") as edlib_mock, \
+        with patch.object(auto, "GuardedTab", new=lambda tab, assessment_mode: tab), \
+             patch.object(auto, "edlib") as edlib_mock, \
              patch.object(auto, "login") as login_mock, \
              patch.object(auto, "st", return_value=status), \
              patch.object(auto, "update_live_status"), \

@@ -21,7 +21,8 @@ class CompletionTests(unittest.TestCase):
         state = {'unit': 'Unit 1', 'lesson': 'Lesson 3', 'step': 'Test',
                  'counter': counter, 'total': '1', 'body': ''}
         output = io.StringIO()
-        with patch.object(auto.edlib, 'tab', return_value=Tab()), \
+        with patch.object(auto, 'GuardedTab', new=lambda tab, assessment_mode: tab), \
+             patch.object(auto.edlib, 'tab', return_value=Tab()), \
              patch.object(auto.login, 'ensure_login', return_value=True), \
              patch.object(auto, 'st', return_value=state), \
              patch.object(auto, 'update_live_status'), \
