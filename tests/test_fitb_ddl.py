@@ -1281,6 +1281,201 @@ console.log(JSON.stringify({clicked, result}));
         self.assertEqual(result["result"]["selected"], "alpha")
         self.assertEqual(result["result"]["scope"], "portal-linked")
 
+    def test_broad_overlay_active_descendant_pick_never_clicks_stale_menu(self):
+        node_bin = shutil.which("node")
+        if not node_bin:
+            self.skipTest("node is required to execute the emitted JS")
+        captured = []
+
+        class CaptureTab:
+            def js(self, script):
+                captured.append(script)
+                if "practiceData" in script and "answerLists" in script:
+                    return {"text": "Pick __", "lists": [["alpha", "beta"]],
+                            "domCount": 1, "domLists": [[]]}
+                if "closeOtherMenus(s," in script:
+                    return {"status": "ok", "selected": "", "selectedPlaceholder": True}
+                if "options: res.items.map(getOptText)" in script:
+                    return {"status": "ok", "scope": "portal-linked", "selected": "",
+                            "selectedPlaceholder": True, "options": ["alpha", "beta"]}
+                if "const wantText =" in script:
+                    return {"clicked": 0, "selected": "", "selectedPlaceholder": True}
+                if "return getTriggers().map(" in script:
+                    return [{"selected": "", "selectedPlaceholder": True}]
+                return None
+
+        with patch.object(solver, "ask_json", return_value={"1": "alpha"}), \
+             patch.object(solver.time, "sleep"):
+            solver.solve_fitb(CaptureTab(), "")
+        pick_js = next(s for s in captured if "const wantText =" in s)
+        harness = _NODE_DOM_SHIM + r"""
+const body = new El('body');
+const documentElement = new El('html').append(body);
+const practice = new El('div', 'learning__angPracticeW');
+body.append(practice);
+const s = new El('div', 'DDLOptions__selected', '',
+  {'aria-controls': 'overlay', 'aria-activedescendant': 'active'});
+practice.append(new El('div', 'DDLOptionsW').append(s));
+let staleClicked = false, intendedClicked = false;
+const stale = new El('li', 'DDLOptions__listItem', 'alpha');
+stale.onclick = () => { staleClicked = true; };
+const target = new El('li', 'DDLOptions__listItem', 'alpha', {id: 'active'});
+target.onclick = () => { intendedClicked = true; s.innerText = s.textContent = 'alpha'; };
+body.append(new El('div', 'cdk-overlay-pane', '', {id: 'overlay'}).append(
+  new El('ul', 'DDLOptions__list').append(stale, new El('li', 'DDLOptions__listItem', 'beta')),
+  new El('ul', 'DDLOptions__list').append(target, new El('li', 'DDLOptions__listItem', 'beta'))));
+const document = {body, documentElement,
+  querySelectorAll: q => documentElement.querySelectorAll(q),
+  querySelector: q => documentElement.querySelector(q)};
+const window = {getComputedStyle: el => el.style};
+const result = """ + pick_js + r""";
+console.log(JSON.stringify({staleClicked, intendedClicked, result}));
+"""
+        proc = subprocess.run([node_bin, "-e", harness], check=True, capture_output=True, text=True)
+        result = json.loads(proc.stdout)
+        self.assertFalse(result["staleClicked"])
+        self.assertTrue(result["intendedClicked"])
+        self.assertEqual(result["result"]["selected"], "alpha")
+
+    def test_conflicting_specific_link_and_active_descendant_fail_closed(self):
+        node_bin = shutil.which("node")
+        if not node_bin:
+            self.skipTest("node is required to execute emitted JS")
+        scripts = []
+
+        class CaptureTab:
+            def js(self, script):
+                scripts.append(script)
+                return {"status": "ok", "options": [], "scope": "none"}
+
+        with patch.object(solver.time, "sleep"):
+            solver._open_and_read_ddl(CaptureTab(), 0)
+        harness = _NODE_DOM_SHIM + r"""
+const body = new El('body');
+const documentElement = new El('html').append(body);
+const practice = new El('div', 'learning__angPracticeW');
+body.append(practice);
+const s = new El('div', 'DDLOptions__selected', '',
+  {'aria-controls': 'first-menu', 'aria-activedescendant': 'second-active'});
+practice.append(new El('div', 'DDLOptionsW').append(s));
+body.append(new El('ul', 'DDLOptions__list', '', {id: 'first-menu'}).append(
+  new El('li', 'DDLOptions__listItem', 'alpha')),
+  new El('ul', 'DDLOptions__list').append(
+  new El('li', 'DDLOptions__listItem', 'beta', {id: 'second-active'})));
+const document = {body, documentElement,
+  querySelectorAll: q => documentElement.querySelectorAll(q),
+  querySelector: q => documentElement.querySelector(q)};
+const window = {getComputedStyle: el => el.style};
+const result = """ + scripts[1] + r""";
+console.log(JSON.stringify(result));
+"""
+        proc = subprocess.run([node_bin, "-e", harness], check=True, capture_output=True, text=True)
+        result = json.loads(proc.stdout)
+        self.assertEqual((result["scope"], result["options"]), ("none", []))
+
+    def test_broad_overlay_without_specific_owner_fails_closed(self):
+        node_bin = shutil.which("node")
+        if not node_bin:
+            self.skipTest("node is required to execute emitted JS")
+        scripts = []
+
+        class CaptureTab:
+            def js(self, script):
+                scripts.append(script)
+                return {"status": "ok", "options": [], "scope": "none"}
+
+        with patch.object(solver.time, "sleep"):
+            solver._open_and_read_ddl(CaptureTab(), 0)
+        harness = _NODE_DOM_SHIM + r"""
+const body = new El('body');
+const documentElement = new El('html').append(body);
+const practice = new El('div', 'learning__angPracticeW');
+body.append(practice);
+const s = new El('div', 'DDLOptions__selected', '', {'aria-controls': 'overlay'});
+practice.append(new El('div', 'DDLOptionsW').append(s));
+body.append(new El('div', '', '', {id: 'overlay'}).append(
+  new El('ul', 'DDLOptions__list').append(new El('li', 'DDLOptions__listItem', 'alpha')),
+  new El('ul', 'DDLOptions__list').append(new El('li', 'DDLOptions__listItem', 'alpha'))));
+const document = {body, documentElement,
+  querySelectorAll: q => documentElement.querySelectorAll(q),
+  querySelector: q => documentElement.querySelector(q)};
+const window = {getComputedStyle: el => el.style};
+const result = """ + scripts[1] + r""";
+console.log(JSON.stringify(result));
+"""
+        proc = subprocess.run([node_bin, "-e", harness], check=True, capture_output=True, text=True)
+        result = json.loads(proc.stdout)
+        self.assertEqual((result["scope"], result["options"]), ("none", []))
+
+    def test_unrelated_loose_options_under_broad_overlay_fail_closed(self):
+        node_bin = shutil.which("node")
+        if not node_bin:
+            self.skipTest("node is required to execute emitted JS")
+        scripts = []
+
+        class CaptureTab:
+            def js(self, script):
+                scripts.append(script)
+                return {"status": "ok", "options": [], "scope": "none"}
+
+        with patch.object(solver.time, "sleep"):
+            solver._open_and_read_ddl(CaptureTab(), 0)
+        harness = _NODE_DOM_SHIM + r"""
+const body = new El('body');
+const documentElement = new El('html').append(body);
+const practice = new El('div', 'learning__angPracticeW');
+body.append(practice);
+const s = new El('div', 'DDLOptions__selected', '', {'aria-controls': 'overlay'});
+practice.append(new El('div', 'DDLOptionsW').append(s));
+body.append(new El('div', '', '', {id: 'overlay'}).append(
+  new El('div', 'first-widget').append(new El('div', 'DDLOptions__option', 'alpha')),
+  new El('div', 'second-widget').append(new El('div', 'DDLOptions__option', 'beta'))));
+const document = {body, documentElement,
+  querySelectorAll: q => documentElement.querySelectorAll(q),
+  querySelector: q => documentElement.querySelector(q)};
+const window = {getComputedStyle: el => el.style};
+const result = """ + scripts[1] + r""";
+console.log(JSON.stringify(result));
+"""
+        proc = subprocess.run([node_bin, "-e", harness], check=True, capture_output=True, text=True)
+        result = json.loads(proc.stdout)
+        self.assertEqual((result["scope"], result["options"]), ("none", []))
+
+    def test_conflicting_broad_and_specific_portal_owners_fail_closed(self):
+        node_bin = shutil.which("node")
+        if not node_bin:
+            self.skipTest("node is required to execute emitted JS")
+        scripts = []
+
+        class CaptureTab:
+            def js(self, script):
+                scripts.append(script)
+                return {"status": "ok", "options": [], "scope": "none"}
+
+        with patch.object(solver.time, "sleep"):
+            solver._open_and_read_ddl(CaptureTab(), 0)
+        harness = _NODE_DOM_SHIM + r"""
+const body = new El('body');
+const documentElement = new El('html').append(body);
+const practice = new El('div', 'learning__angPracticeW');
+body.append(practice);
+const s0 = new El('div', 'DDLOptions__selected', '', {'aria-activedescendant': 'active'});
+const s1 = new El('div', 'DDLOptions__selected', '', {'aria-controls': 'overlay'});
+practice.append(new El('div', 'DDLOptionsW').append(s0), new El('div', 'DDLOptionsW').append(s1));
+body.append(new El('div', '', '', {id: 'overlay'}).append(
+  new El('ul', 'DDLOptions__list').append(new El('li', 'DDLOptions__listItem', 'alpha', {id: 'active'})),
+  new El('ul', 'DDLOptions__list').append(new El('li', 'DDLOptions__listItem', 'beta'))));
+const document = {body, documentElement,
+  querySelectorAll: q => documentElement.querySelectorAll(q),
+  querySelector: q => documentElement.querySelector(q)};
+const window = {getComputedStyle: el => el.style};
+const result = """ + scripts[1] + r""";
+console.log(JSON.stringify(result));
+"""
+        proc = subprocess.run([node_bin, "-e", harness], check=True, capture_output=True, text=True)
+        result = json.loads(proc.stdout)
+        self.assertEqual((result["scope"], result["options"]), ("none", []))
+
     def test_pick_js_fails_closed_in_node_when_target_option_disappears(self):
         node_bin = shutil.which("node")
         if not node_bin:

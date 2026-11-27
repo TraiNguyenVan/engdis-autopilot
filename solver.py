@@ -1035,35 +1035,55 @@ _FITB_DOM_JS = r"""
       const id = String(item.id || '');
       if (id) idCounts.set(id, (idCounts.get(id) || 0) + 1);
     }
+    const broadPortalIds = new Set();
+    const broadLabelledBy = new Set();
     let anc = el;
     const portalIds = new Set();
     const labelledBy = new Set();
     while (anc && anc !== document.body && anc !== document.documentElement) {
-      if (anc.id && idCounts.get(String(anc.id)) === 1) portalIds.add(String(anc.id));
+      // A link to an overlay containing multiple independent lists does not
+      // establish which one belongs to the trigger. Do not promote that broad
+      // relation to every child; a specific active-descendant may still do so.
+      const groups = new Set([...anc.querySelectorAll(OPT_SEL)].map(option => {
+        const group = option.closest && option.closest(MENU_SEL);
+        return group && anc.contains(group) ? group : option.parentElement;
+      }));
+      const unambiguous = groups.size <= 1;
+      if (anc.id && idCounts.get(String(anc.id)) === 1)
+        (unambiguous ? portalIds : broadPortalIds).add(String(anc.id));
       for (const attr of ['aria-labelledby', 'data-trigger', 'data-for', 'data-owner', 'data-ddl-for']) {
         const v = getAttr(anc, attr);
-        if (v) String(v).split(/\s+/).filter(Boolean).forEach(x => labelledBy.add(x.replace(/^#/, '')));
+        if (v) String(v).split(/\s+/).filter(Boolean).forEach(x =>
+          (unambiguous ? labelledBy : broadLabelledBy).add(x.replace(/^#/, '')));
       }
       anc = anc.parentElement;
     }
     const owners = new Set();
+    const broadOwners = new Set();
     for (const trig of allTriggers) {
       const scopes = [trig, ...getContainers(trig)];
       for (const sc of scopes) {
         const active = getAttr(sc, 'aria-activedescendant');
         if (active && idCounts.get(String(active)) === 1 &&
             menuOptions.some(option => String(option.id || '') === String(active))) owners.add(trig);
-        if (sc && sc.id && idCounts.get(String(sc.id)) === 1 && labelledBy.has(String(sc.id))) owners.add(trig);
+        if (sc && sc.id && idCounts.get(String(sc.id)) === 1) {
+          if (labelledBy.has(String(sc.id))) owners.add(trig);
+          if (broadLabelledBy.has(String(sc.id))) broadOwners.add(trig);
+        }
         for (const attr of ['aria-controls', 'aria-owns', 'data-target', 'data-dropdown', 'data-menu', 'data-portal']) {
           const raw = getAttr(sc, attr);
           if (!raw) continue;
           for (const tok of String(raw).split(/\s+/).filter(Boolean)) {
-            if (portalIds.has(tok.replace(/^#/, ''))) owners.add(trig);
+            const id = tok.replace(/^#/, '');
+            if (portalIds.has(id)) owners.add(trig);
+            if (broadPortalIds.has(id)) broadOwners.add(trig);
           }
         }
       }
     }
-    return owners.size === 1 ? [...owners][0] : null;
+    if (owners.size !== 1) return null;
+    const owner = [...owners][0];
+    return [...broadOwners].every(trig => trig === owner) ? owner : null;
   };
   const dedupOptions = (nodes) => {
     const arr = [...nodes];
@@ -1099,7 +1119,14 @@ _FITB_DOM_JS = r"""
       const explicitOwner = getPortalOwner(el);
       if (explicitOwner === s) linkedVis.push(el);
     }
-    if (linkedVis.length) return {items: linkedVis, scope: 'portal-linked'};
+    if (linkedVis.length) {
+      // Distinct menus independently linked to one trigger conflict: never let
+      // their identical option text turn an ambiguous lookup into a click.
+      const menuSel = '.DDLOptions__list, [role="listbox"]';
+      const groups = new Set(linkedVis.map(el => (el.closest && el.closest(menuSel)) || null));
+      if (groups.size === 1) return {items: linkedVis, scope: 'portal-linked'};
+      return {items: [], scope: 'none'};
+    }
     for (const c of containers) {
       const raw = selectableOptions(c.querySelectorAll(OPT_SEL));
       if (raw.length) return {items: raw, scope: 'container-hidden'};
