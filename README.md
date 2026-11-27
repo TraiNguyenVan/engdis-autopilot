@@ -2,7 +2,7 @@
 
 Automated browser testing and exercise solver harness for English Discoveries courseware via Chrome DevTools Protocol (CDP) and multimodal LLMs.
 
-> **Reliability warning:** First-run behavior can differ across machines because browser versions, codecs, network access, login state, and LMS timing vary. The harness may stall or give wrong/incomplete answers; it does **not** guarantee 100% completion or scores. Run it with the `cover.py` supervisor in Agent Yield mode, monitor progress, and inspect/fix stalls instead of assuming a run succeeded. Use `--unattended` only for routine coverage when skipping a stalled item is acceptable. Do not use unattended/headless automation for graded Assessment Center exams.
+> **Reliability warning:** First-run behavior can differ across machines because browser versions, codecs, network access, login state, and LMS timing vary. The harness may stall or give wrong/incomplete answers; it does **not** guarantee 100% completion or scores. For routine lessons and practice, run it with the `cover.py` supervisor in Agent Yield mode, monitor progress, and inspect/fix stalls instead of assuming a run succeeded. Use `--unattended` only for routine coverage when skipping a stalled item is acceptable. Assessment Center automation is unverified and should not be run on a real attempt; see the limitations below.
 
 ## Pick the right mode first
 
@@ -11,7 +11,7 @@ In the example prompts below, replace placeholders with your details. If a requi
 | You want to | Run | Why |
 | :--- | :--- | :--- |
 | Lessons and practice, including **unit lesson tests** (not graded) | **Docker** (`docker compose run engdis`) or local | Headless is fine; lesson-test outcomes only affect unit completion percentage |
-| A **graded exam** — Assessment Center midterm/final | **Local visible browser**, started by the agent; you open the exam, then `auto.py` runs on that page | `cover.py` cannot open it; monitor the run |
+| A **graded exam** — Assessment Center midterm/final | **Local visible browser**, started by the agent; you open the exam; technical assistance only | Assessment automation is unverified; `cover.py` cannot open it and `auto.py` is not safe to run on a real attempt |
 
 If you have an Assessment Center exam, follow the **Assessment Center exam instructions immediately below**. Unit lesson tests are ungraded; Docker/automation is for practice and coverage only.
 
@@ -21,15 +21,17 @@ The courseware's scored assessment is the **Assessment Center exam** (midterm, f
 
 ### Assessment Center prompt
 
-This path is unverified in this repo: there is no Assessment Center fixture. Monitor the run and stop on a stall or an empty question; results are not guaranteed. The bootstrap enables a fake microphone, so it is not suitable for real speaking answers.
+Assessment Center automation is **unverified and not safe to run on a real attempt**. There is no Assessment Center fixture or verified run. Until the automation and its safeguards are verified, use the agent for browser, login, and connection assistance only; do not start `auto.py` on an exam, including as a continuous background process. Monitoring cannot guarantee that it stops before an unsafe action. The bootstrap enables a fake microphone, so it is not suitable for real speaking answers.
 
-> `/engdis-autopilot Help me with my Assessment Center <EXAM_TYPE>. Before launch, check that port 9225 and ~/.ed-profile are free (if in use, stop and tell me). If any necessary details are missing or unclear, ask me once in a single grouped question—or offer to launch Chrome first so we can check what is available. Start visible local Chrome with python3 bootstrap_browser.py --headed --port 9225 --profile ~/.ed-profile, keep it running, and verify the window and CDP connection (if Chrome cannot start, stop and tell me). If the exam requires a real microphone, stop and tell me before starting the attempt: the bootstrap uses a fake audio device. Help me log in if needed (remind me to close other logged-in browsers/devices to avoid #/SessionTimeout), then wait for me to open the exam myself and authorize the attempt. Do not use cover.py, Docker, headless mode, or --unattended. Attach to the open exam tab with auto.py; monitor every question and verify an answer is registered before advancing. If a question is empty, the counter stalls, a reminder appears, or the page is ambiguous, stop without submitting and tell me what happened. Submit only after every question is visibly answered, report the score shown, then stop.`
+> `/engdis-autopilot Help me with technical preparation for my Assessment Center <EXAM_TYPE>. Before launch, check that port 9225 and ~/.ed-profile are free (if in use, stop and tell me). If necessary details are unclear, ask me in a grouped question. Start visible local Chrome with python3 bootstrap_browser.py --headed --port 9225 --profile ~/.ed-profile, keep it running, and verify the window and CDP connection; if Chrome cannot start, stop and tell me. If the exam requires a real microphone, tell me before starting the attempt: the bootstrap uses a fake audio device. Help me log in if needed, then wait for me to open the exam myself and authorize the attempt. Provide browser, login, and connection assistance only. Do not run auto.py or cover.py on the exam; Assessment Center automation and its safeguards are unverified.`
 
 ### Assessment Center boundaries
 
 - The Assessment Center is separate from the unit/lesson tree. `cover.py` cannot open it.
-- This repo has no Assessment Center fixture or verified run. Unit lesson tests passing says nothing about Assessment Center behavior.
-- Keep the browser visible, monitor the run, and stop on stalls or ambiguous questions. Explicit authorization is required for the attempt.
+- `driver.open_tab` prefers a `learningArea` page or falls back to the first page; it does not identify the requested Assessment Center tab reliably.
+- `auto.py` checks some unanswered states, but does not verify all answers or completion before its last-question submission path. It can click submission, confirm a modal, and call progress setters even when the score is unknown. It does not enforce the desired fail-closed safeguards for an exam.
+- This repo has no Assessment Center fixture or verified run. Unit lesson tests passing says nothing about Assessment Center behavior. A visible browser, background monitoring, or explicit authorization does not fix these limitations.
+- The user opens the exam and authorizes the attempt. Keep assistance technical until the exam automation path and safeguards have been verified.
 - Do not include private score anecdotes or percentages in the public README or PR text.
 
 ---
