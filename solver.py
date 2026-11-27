@@ -473,8 +473,284 @@ def solve_multi(t, src):
     return "multi: " + ", ".join(items[i - 1]["t"][:30] for i in idx)
 
 
+_BANK_ZONE = "TTpTablePlaceHolder"
+_BANK_ZONE_SEL = f'.dndZone[dg_name="{_BANK_ZONE}"], .dndZone#{_BANK_ZONE}'
+_DRAG_DROP_OFFSETS = ((0, 0), (-25, 0), (25, 0), (0, -4), (0, 4), (0, 8))
+
+
+def _is_bank_zone(z):
+    return isinstance(z, dict) and (z.get("n") == _BANK_ZONE or z.get("id") == _BANK_ZONE)
+
+
+def _clamp_drop_offset(z, dx, dy, fallback_box=None):
+    if dx:
+        w = z.get("w") if z.get("w") is not None else z.get("width")
+        if w is None and isinstance(fallback_box, dict):
+            w = fallback_box.get("w")
+        if isinstance(w, (int, float)) and not isinstance(w, bool) and w > 0:
+            max_dx = max(0.0, w / 2.0 - min(4.0, w / 4.0))
+            dx = max(-max_dx, min(max_dx, dx))
+    return dx, dy
+
+
+def _endpoints_reachable(item, tx, ty, meta):
+    if not isinstance(meta, dict):
+        return True
+    if meta.get("sourceInView") is False or meta.get("targetInView") is False:
+        return False
+    vw, vh = meta.get("vw"), meta.get("vh")
+    if isinstance(vw, (int, float)) and not isinstance(vw, bool) and vw > 0:
+        if item["cx"] < 0 or item["cx"] >= vw or tx < 0 or tx >= vw:
+            return False
+    if isinstance(vh, (int, float)) and not isinstance(vh, bool) and vh > 0:
+        if item["cy"] < 0 or item["cy"] >= vh or ty < 0 or ty >= vh:
+            return False
+    return True
+
+
+def _too_far_for_offsets(item, z, meta):
+    if not isinstance(meta, dict):
+        return False
+    if meta.get("unreachable") is True:
+        return True
+    vw, vh = meta.get("vw"), meta.get("vh")
+    if isinstance(vh, (int, float)) and not isinstance(vh, bool) and vh > 0:
+        if z["cy"] - 8 >= vh or z["cy"] + 8 < 0 or abs(z["cy"] - item["cy"]) > vh + 8:
+            return True
+    if isinstance(vw, (int, float)) and not isinstance(vw, bool) and vw > 0:
+        if z["cx"] - 25 >= vw or z["cx"] + 25 < 0 or abs(z["cx"] - item["cx"]) > vw + 25:
+            return True
+    return False
+
+
+def _scroll_drag_into_view(t, zone_sel, word, dx=0, dy=0):
+    meta = t.js("""(() => {
+      const want = %s.toLowerCase();
+      const z = document.querySelector(%s);
+      const reqDx = %s, reqDy = %s;
+      const items = [...document.querySelectorAll('.dnditem')];
+      const it = items.find(e => e.innerText.trim().toLowerCase() === want)
+              || items.find(e => e.innerText.toLowerCase().includes(want));
+      const vh = () => {
+        const ih = window.innerHeight || 0;
+        const ch = (document.documentElement && document.documentElement.clientHeight) || 0;
+        return (ih > 0 && ch > 0) ? Math.min(ih, ch) : (ih || ch || 800);
+      };
+      const vw = () => {
+        const iw = window.innerWidth || 0;
+        const cw = (document.documentElement && document.documentElement.clientWidth) || 0;
+        return (iw > 0 && cw > 0) ? Math.min(iw, cw) : (iw || cw || 1280);
+      };
+      const clipsAxis = val => /^(hidden|scroll|auto|clip)$/.test(val || '');
+      const ancestorClipFlags = cur => {
+        if (typeof window.getComputedStyle === 'function') {
+          const cs = window.getComputedStyle(cur);
+          if (cs && (cs.display === 'none' || cs.visibility === 'hidden')) return { hidden: true, cx: true, cy: true };
+          return {
+            hidden: false,
+            cx: clipsAxis(cs && (cs.overflowX || cs.overflow)),
+            cy: clipsAxis(cs && (cs.overflowY || cs.overflow))
+          };
+        }
+        return {
+          hidden: false,
+          cx: (cur.clientWidth > 0 && cur.scrollWidth > cur.clientWidth) || clipsAxis(cur.overflowX || cur.overflow),
+          cy: (cur.clientHeight > 0 && cur.scrollHeight > cur.clientHeight) || clipsAxis(cur.overflowY || cur.overflow)
+        };
+      };
+      const visibleBoundsFor = el => {
+        let left = 0, top = 0, right = vw(), bottom = vh();
+        let cur = el ? el.parentElement : null;
+        while (cur && cur !== document.documentElement) {
+          const fl = ancestorClipFlags(cur);
+          if (fl.hidden) return { left: 0, top: 0, right: 0, bottom: 0 };
+          if ((fl.cx || fl.cy) && typeof cur.getBoundingClientRect === 'function') {
+            const cr = cur.getBoundingClientRect();
+            const cl = cr.left + (cur.clientLeft || 0);
+            const ct = cr.top + (cur.clientTop || 0);
+            const cRight = cur.clientWidth > 0 ? (cl + cur.clientWidth) : cr.right;
+            const cBot = cur.clientHeight > 0 ? (ct + cur.clientHeight) : cr.bottom;
+            if (fl.cx) { left = Math.max(left, cl); right = Math.min(right, cRight); }
+            if (fl.cy) { top = Math.max(top, ct); bottom = Math.min(bottom, cBot); }
+          }
+          cur = cur.parentElement;
+        }
+        return { left, top, right, bottom };
+      };
+      const isPointVisible = (el, px, py) => {
+        if (!el || typeof el.getBoundingClientRect !== 'function') return false;
+        if (typeof window.getComputedStyle === 'function') {
+          const es = window.getComputedStyle(el);
+          if (es && (es.display === 'none' || es.visibility === 'hidden' || parseFloat(es.opacity) === 0)) return false;
+        }
+        const r = el.getBoundingClientRect();
+        if (r.width <= 0 || r.height <= 0) return false;
+        const b = visibleBoundsFor(el);
+        if (b.right <= b.left || b.bottom <= b.top) return false;
+        if (px < b.left || px >= b.right || py < b.top || py >= b.bottom) return false;
+        const zx = r.width > 2 ? Math.max(r.left + 1, Math.min(r.right - 1, px)) : (r.left + r.width / 2);
+        const zy = r.height > 2 ? Math.max(r.top + 1, Math.min(r.bottom - 1, py)) : (r.top + r.height / 2);
+        if (zx < b.left || zx >= b.right || zy < b.top || zy >= b.bottom) return false;
+        if (typeof document.elementFromPoint === 'function') {
+          const hit = document.elementFromPoint(zx, zy);
+          if (!hit) return false;
+          if (hit !== el && !(typeof el.contains === 'function' && el.contains(hit))) return false;
+        }
+        return true;
+      };
+      const scrollByDelta = (el, dx, dy) => {
+        let moved = false;
+        let cur = el ? el.parentElement : null;
+        while (cur && cur !== document.body && cur !== document.documentElement) {
+          if (dy && cur.scrollHeight > cur.clientHeight) {
+            const b = cur.scrollTop;
+            cur.scrollTop += dy;
+            if (cur.scrollTop !== b) moved = true;
+          }
+          if (dx && cur.scrollWidth > cur.clientWidth) {
+            const b = cur.scrollLeft;
+            cur.scrollLeft += dx;
+            if (cur.scrollLeft !== b) moved = true;
+          }
+          cur = cur.parentElement;
+        }
+        if ((dx || dy) && typeof window.scrollBy === 'function') {
+          const bx = window.scrollX || window.pageXOffset || 0;
+          const by = window.scrollY || window.pageYOffset || 0;
+          window.scrollBy(dx, dy);
+          const ax = window.scrollX || window.pageXOffset || 0;
+          const ay = window.scrollY || window.pageYOffset || 0;
+          if (ax !== bx || ay !== by) moved = true;
+        }
+        return moved;
+      };
+      const evalEndpoints = () => {
+        const ir = it ? it.getBoundingClientRect() : null;
+        const zr = z ? z.getBoundingClientRect() : null;
+        let cdx = reqDx, cdy = reqDy;
+        if (cdx && zr && zr.width > 0) {
+          const mx = Math.max(0, zr.width / 2 - Math.min(4, zr.width / 4));
+          cdx = Math.max(-mx, Math.min(mx, cdx));
+        }
+        const sx = ir ? ir.left + ir.width / 2 : 0;
+        const sy = ir ? ir.top + ir.height / 2 : 0;
+        const tx = zr ? zr.left + zr.width / 2 + cdx : 0;
+        const ty = zr ? zr.top + zr.height / 2 + cdy : 0;
+        return {
+          ir, zr, sx, sy, tx, ty,
+          srcOk: it ? isPointVisible(it, sx, sy) : false,
+          tgtOk: z ? isPointVisible(z, tx, ty) : false
+        };
+      };
+
+      let ep = evalEndpoints();
+      if (!it || !z || (ep.srcOk && ep.tgtOk)) {
+        return {
+          scrolled: 0,
+          w: ep.zr ? ep.zr.width : null,
+          h: ep.zr ? ep.zr.height : null,
+          vw: vw(),
+          vh: vh(),
+          sourceInView: ep.srcOk,
+          targetInView: ep.tgtOk,
+          unreachable: (!it || !z) ? true : false
+        };
+      }
+
+      let scrolled = 0;
+      if (!ep.srcOk && typeof it.scrollIntoView === 'function') {
+        it.scrollIntoView({block: 'nearest', inline: 'nearest'});
+        scrolled = 1;
+        ep = evalEndpoints();
+      }
+      if (!ep.tgtOk && typeof z.scrollIntoView === 'function') {
+        z.scrollIntoView({block: 'nearest', inline: 'nearest'});
+        scrolled = 1;
+        ep = evalEndpoints();
+      }
+      if (!ep.srcOk || !ep.tgtOk) {
+        let bLeft = 0, bTop = 0, bRight = vw(), bBot = vh();
+        let anc = it ? it.parentElement : null;
+        while (anc && anc !== document.documentElement) {
+          if (typeof anc.contains === 'function' && anc.contains(z)) {
+            const fl = ancestorClipFlags(anc);
+            if ((fl.cx || fl.cy) && typeof anc.getBoundingClientRect === 'function') {
+              const cr = anc.getBoundingClientRect();
+              const cl = cr.left + (anc.clientLeft || 0), ct = cr.top + (anc.clientTop || 0);
+              const cRight = anc.clientWidth > 0 ? (cl + anc.clientWidth) : cr.right;
+              const cBot = anc.clientHeight > 0 ? (ct + anc.clientHeight) : cr.bottom;
+              if (fl.cx) { bLeft = Math.max(bLeft, cl); bRight = Math.min(bRight, cRight); }
+              if (fl.cy) { bTop = Math.max(bTop, ct); bBot = Math.min(bBot, cBot); }
+            }
+          }
+          anc = anc.parentElement;
+        }
+        const availW = bRight - bLeft, availH = bBot - bTop;
+        let dxS = 0, dyS = 0;
+        if (availH > 0) {
+          const minTop = Math.min(ep.ir.top, ep.zr.top), maxBot = Math.max(ep.ir.bottom, ep.zr.bottom);
+          const minPy = Math.min(ep.sy, ep.ty), maxPy = Math.max(ep.sy, ep.ty);
+          if (maxBot - minTop <= availH) {
+            if (minTop < bTop) dyS = minTop - bTop;
+            else if (maxBot > bBot) dyS = maxBot - bBot;
+          } else if (maxPy - minPy <= availH - 2) {
+            if (minPy < bTop + 1) dyS = minPy - (bTop + 1);
+            else if (maxPy > bBot - 1) dyS = maxPy - (bBot - 1);
+          }
+        }
+        if (availW > 0) {
+          const minLeft = Math.min(ep.ir.left, ep.zr.left), maxRight = Math.max(ep.ir.right, ep.zr.right);
+          const minPx = Math.min(ep.sx, ep.tx), maxPx = Math.max(ep.sx, ep.tx);
+          if (maxRight - minLeft <= availW) {
+            if (minLeft < bLeft) dxS = minLeft - bLeft;
+            else if (maxRight > bRight) dxS = maxRight - bRight;
+          } else if (maxPx - minPx <= availW - 2) {
+            if (minPx < bLeft + 1) dxS = minPx - (bLeft + 1);
+            else if (maxPx > bRight - 1) dxS = maxPx - (bRight - 1);
+          }
+        }
+        const moved = (dxS || dyS) ? scrollByDelta(it, dxS, dyS) : false;
+        if (moved) {
+          scrolled = 1;
+          ep = evalEndpoints();
+        }
+        if (!ep.srcOk && typeof it.scrollIntoView === 'function') {
+          const fitsBoth = availH > 0 && availW > 0
+            && (Math.max(ep.sy, ep.ty) - Math.min(ep.sy, ep.ty)) <= availH - 2
+            && (Math.max(ep.sx, ep.tx) - Math.min(ep.sx, ep.tx)) <= availW - 2;
+          if ((!moved && fitsBoth) || !ep.srcOk) {
+            it.scrollIntoView({block: 'nearest', inline: 'nearest'});
+            scrolled = 1;
+            ep = evalEndpoints();
+          }
+        }
+      }
+
+      const tb = visibleBoundsFor(z);
+      const zBoxCanReach = !!ep.zr && tb.right > tb.left && tb.bottom > tb.top
+        && (ep.zr.right + 25) > tb.left && (ep.zr.left - 25) < tb.right
+        && (ep.zr.bottom + 8) > tb.top && (ep.zr.top - 8) < tb.bottom;
+      const unreachable = !ep.srcOk || (!ep.tgtOk && !zBoxCanReach);
+
+      return {
+        scrolled: scrolled,
+        w: ep.zr ? ep.zr.width : null,
+        h: ep.zr ? ep.zr.height : null,
+        vw: vw(),
+        vh: vh(),
+        sourceInView: ep.srcOk,
+        targetInView: ep.tgtOk,
+        unreachable: unreachable
+      };
+    })()""" % (json.dumps(str(word).strip()), json.dumps(zone_sel), json.dumps(dx), json.dumps(dy)))
+    if isinstance(meta, dict) and meta.get("scrolled") == 1:
+        time.sleep(0.1)
+    return meta if isinstance(meta, dict) else None
+
+
 def _drag_snapshot(t):
     res = t.js("""(() => {
+      const isBank = z => z.getAttribute('dg_name') === 'TTpTablePlaceHolder' || z.id === 'TTpTablePlaceHolder';
       const zones = [...document.querySelectorAll('.dndZone')].map(z => {
         let label = '';
         const row = z.closest('.prMT_T2T__answersRow, .prSeq__zone--txt, tr, .answersRow');
@@ -484,12 +760,14 @@ def _drag_snapshot(t):
         }
         return {
           n: z.getAttribute('dg_name'),
+          id: z.id || '',
           label: label,
           items: [...z.querySelectorAll('.dnditem')].map(x => x.innerText.trim())
         };
       });
-      const b = [...document.querySelectorAll('.dndZone')].find(z => z.getAttribute('dg_name') === 'TTpTablePlaceHolder');
-      const bank = b ? [...b.querySelectorAll('.dnditem')].map(x => x.innerText.trim()) : [];
+      const bank = [...document.querySelectorAll('.dndZone')]
+        .filter(isBank)
+        .flatMap(b => [...b.querySelectorAll('.dnditem')].map(x => x.innerText.trim()));
       return { zones: zones, bank: bank };
     })()""") or {}
     return res.get("zones", []), res.get("bank", [])
@@ -497,21 +775,25 @@ def _drag_snapshot(t):
 
 def solve_drag(t, src):
     zones, bank = _drag_snapshot(t)
-    target_zones = [z for z in zones if z["n"] != "TTpTablePlaceHolder"]
+    target_zones = [z for z in zones if not _is_bank_zone(z)]
+    bank_sel = f'{_BANK_ZONE_SEL}, #{_BANK_ZONE}'
     if target_zones and all(z["items"] for z in target_zones):
         print("-- drag: zones pre-filled; clearing and re-dropping")
+        moved_to_bank = False
         for z in target_zones:
             for item_text in z["items"]:
+                bmeta = _scroll_drag_into_view(t, bank_sel, item_text)
                 rr = edlib.rects(t)
                 it = next((i for i in rr["items"] if i["t"].strip() == item_text.strip()), None)
-                bz = next((zz for zz in rr["zones"] if zz["n"] == "TTpTablePlaceHolder"), None)
-                if not it or not bz:
+                bz = next((zz for zz in rr["zones"] if _is_bank_zone(zz)), None)
+                if not it or not bz or not _endpoints_reachable(it, bz["cx"], bz["cy"], bmeta):
                     continue
                 t.drag_xy(it["cx"], it["cy"], bz["cx"], bz["cy"])
+                moved_to_bank = True
                 time.sleep(0.5)
         zones, bank = _drag_snapshot(t)
-        target_zones = [z for z in zones if z["n"] != "TTpTablePlaceHolder"]
-        if target_zones and all(z["items"] for z in target_zones):
+        target_zones = [z for z in zones if not _is_bank_zone(z)]
+        if moved_to_bank and target_zones and all(z["items"] for z in target_zones):
             return "drag: already"
     prompt = t.js("""(() => {
       const p = document.querySelector('ed-la-matching, ed-la-practicearea, .learning__angPracticeW, .practicearea');
@@ -530,19 +812,22 @@ def solve_drag(t, src):
         r = ask_json(q, max_tokens=2000)
         mapping = (r or {}).get("map", {})
     if not mapping:
-        return "drag: EMPTY-MAP"
+        return "other: drag: EMPTY-MAP"
     # clear zones whose current item is not the desired one
-    bank_zone = "TTpTablePlaceHolder"
     for zid, word in mapping.items():
+        zid = str(zid)
+        if _is_bank_zone({"n": zid, "id": zid}):
+            continue
         cur = t.js(f"""(() => {{const z=document.querySelector('.dndZone[dg_name="{zid}"]'); return z? [...z.querySelectorAll('.dnditem')].map(x=>x.innerText.trim()):[];}})()""")
         for item_text in (cur or []):
             if str(word).strip().lower() in item_text.lower():
                 continue
             for _ in range(3):
+                bmeta = _scroll_drag_into_view(t, bank_sel, item_text)
                 rr = edlib.rects(t)
                 it = next((i for i in rr["items"] if i["t"].strip() == item_text.strip()), None)
-                bz = next((z for z in rr["zones"] if z["n"] == bank_zone), None)
-                if not it or not bz:
+                bz = next((z for z in rr["zones"] if _is_bank_zone(z)), None)
+                if not it or not bz or not _endpoints_reachable(it, bz["cx"], bz["cy"], bmeta):
                     break
                 t.drag_xy(it["cx"], it["cy"], bz["cx"], bz["cy"])
                 time.sleep(0.7)
@@ -550,8 +835,13 @@ def solve_drag(t, src):
     done = []
     for zid, word in mapping.items():
         zid = str(zid)
+        if _is_bank_zone({"n": zid, "id": zid}):
+            continue
         ok = False
-        for attempt in range(4):
+        unreachable = False
+        zone_sel = f'.dndZone[dg_name="{zid}"]'
+        for dx, dy in _DRAG_DROP_OFFSETS:
+            meta = _scroll_drag_into_view(t, zone_sel, word, dx=dx, dy=dy)
             rects = edlib.rects(t)
             item = next((i for i in rects["items"] if i["t"].strip().lower() == str(word).strip().lower()), None)
             if not item:
@@ -559,16 +849,28 @@ def solve_drag(t, src):
             z = next((x for x in rects["zones"] if x["n"] == zid), None)
             if not item or not z:
                 break
-            t.drag_xy(item["cx"], item["cy"], z["cx"], z["cy"] + (attempt - 1) * 4)
+            cdx, cdy = _clamp_drop_offset(z, dx, dy, fallback_box=meta)
+            tx, ty = z["cx"] + cdx, z["cy"] + cdy
+            if not _endpoints_reachable(item, tx, ty, meta):
+                unreachable = True
+                if _too_far_for_offsets(item, z, meta):
+                    break
+                continue
+            unreachable = False
+            t.drag_xy(item["cx"], item["cy"], tx, ty)
             time.sleep(0.8)
             now = t.js(f"""(() => {{const z=document.querySelector('.dndZone[dg_name="{zid}"]');
               return z? [...z.querySelectorAll('.dnditem')].map(x=>x.innerText.trim()):[];}})()""")
             if any(str(word).strip().lower() in x.lower() for x in (now or [])):
                 ok = True
                 break
-        done.append(f"{zid}={'ok' if ok else 'FAIL'}")
+        status = "ok" if ok else ("UNREACHABLE" if unreachable else "FAIL")
+        done.append(f"{zid}={status}")
 
-    return "drag: " + " ".join(done)
+    summary = "drag: " + " ".join(done)
+    if not done or any(not d.endswith("=ok") for d in done):
+        return "other: " + summary
+    return summary
 
 
 
@@ -585,7 +887,7 @@ def solve_sequence(t, src):
       const seen = new Set();
       for (const z of zones) {
         const n = z.getAttribute('dg_name');
-        if (!n || n === 'TTpTablePlaceHolder' || seen.has(n)) continue;
+        if (!n || n === 'TTpTablePlaceHolder' || z.id === 'TTpTablePlaceHolder' || seen.has(n)) continue;
         seen.add(n);
         const item = z.querySelector('.dnditem');
         unique.push({
@@ -1059,7 +1361,7 @@ def do_task(t, src):
       if(document.querySelectorAll('.lessonMultipleAnswer').length) return 'multi';
       if(document.querySelector('.sequenceZone, .prSeq__zone--txt, .prSeqImg__zone, .sequenceZoneWrapper')) return 'sequence';
       if(document.querySelectorAll('.dnditem').length && document.querySelectorAll('.dndZone').length) {
-        if(!document.querySelector('.dndZone[dg_name="TTpTablePlaceHolder"]')) return 'sequence';
+        if(!document.querySelector('.dndZone[dg_name="TTpTablePlaceHolder"], .dndZone#TTpTablePlaceHolder')) return 'sequence';
         return 'drag';
       }
       if(document.querySelectorAll('.TTpanswerDiv').length && document.querySelectorAll('.draggable').length) return 'lcloze';
