@@ -11,7 +11,7 @@ import solver
 
 
 class _FakeFITBTab:
-    """Offline stateful simulation of multi-dropdown `.DDLOptions__selected` pages."""
+    """Simulates Python orchestration; it does not execute emitted DOM JS."""
 
     def __init__(
         self,
@@ -78,8 +78,8 @@ class _FakeFITBTab:
             return "ok", "none", []
         if mode in ("document", "portal-linked"):
             if self.stale_portal is not None:
-                # Mirror `_FITB_DOM_JS`: portals explicitly owned by another trigger or
-                # already visible before `s.click()` are excluded unless bypassed.
+                # Fake orchestration only: these injected results do not prove
+                # that the actual JavaScript can associate a document portal.
                 if self.stale_portal_owner is not None and self.stale_portal_owner != idx:
                     pass
                 elif self.stale_portal_was_pre_visible and not dd.get("bypass_js_before_vis"):
@@ -1066,6 +1066,220 @@ console.log(JSON.stringify({scope: getScopedOptions(s0).scope, count: getScopedO
 """
         proc = subprocess.run([node_bin, "-e", harness], check=True, capture_output=True, text=True)
         self.assertEqual(json.loads(proc.stdout), {"scope": "none", "count": 0})
+
+    def test_active_descendant_identifies_unlinked_menu_via_emitted_js(self):
+        """A unique ARIA active option can identify its list without a menu ID."""
+        node_bin = shutil.which("node")
+        if not node_bin:
+            self.skipTest("node is required to execute the emitted JS")
+        scripts = []
+
+        class CaptureTab:
+            def js(self, script):
+                scripts.append(script)
+                return {"status": "ok", "options": [], "scope": "none"}
+
+        with patch.object(solver.time, "sleep"):
+            solver._open_and_read_ddl(CaptureTab(), 1)
+        open_js, read_js = scripts
+        harness = _NODE_DOM_SHIM + r"""
+const body = new El('body');
+const documentElement = new El('html').append(body);
+const practice = new El('div', 'learning__angPracticeW');
+body.append(practice);
+const s0 = new El('div', 'DDLOptions__selected', 'large');
+const s1 = new El('div', 'DDLOptions__selected', '');
+practice.append(new El('div', 'DDLOptionsW').append(s0), new El('div', 'DDLOptionsW').append(s1));
+const document = {body, documentElement,
+  querySelectorAll: s => documentElement.querySelectorAll(s),
+  querySelector: s => documentElement.querySelector(s)};
+const window = {getComputedStyle: el => el.style};
+s1.onclick = () => {
+  s1.attrs['aria-activedescendant'] = 'option-1';
+  body.append(new El('ul', 'DDLOptions__list').append(
+    new El('li', 'DDLOptions__listItem', 'however', {id: 'option-1'}),
+    new El('li', 'DDLOptions__listItem', 'therefore')));
+};
+const opened = """ + open_js + ";\nconst result = " + read_js + r""";
+console.log(JSON.stringify(result));
+"""
+        proc = subprocess.run([node_bin, "-e", harness], check=True, capture_output=True, text=True)
+        result = json.loads(proc.stdout)
+        self.assertEqual(result["scope"], "portal-linked")
+        self.assertEqual(result["options"], ["however", "therefore"])
+
+    def test_active_descendant_is_not_borrowed_from_another_option_list(self):
+        node_bin = shutil.which("node")
+        if not node_bin:
+            self.skipTest("node is required to execute the emitted JS")
+        scripts = []
+
+        class CaptureTab:
+            def js(self, script):
+                scripts.append(script)
+                return {"status": "ok", "options": [], "scope": "none"}
+
+        with patch.object(solver.time, "sleep"):
+            solver._open_and_read_ddl(CaptureTab(), 0)
+        read_js = scripts[1]
+        harness = _NODE_DOM_SHIM + r"""
+const body = new El('body');
+const documentElement = new El('html').append(body);
+const practice = new El('div', 'learning__angPracticeW');
+body.append(practice);
+const s0 = new El('div', 'DDLOptions__selected', '', {'aria-activedescendant': 'active'});
+practice.append(new El('div', 'DDLOptionsW').append(s0));
+// A broad listbox contains a menu and an unrelated outside option. The
+// active item within that menu cannot establish ownership of the outside option.
+body.append(new El('div', '', '', {role: 'listbox'}).append(
+  new El('ul', 'DDLOptions__list').append(new El('li', 'DDLOptions__listItem', 'right', {id: 'active'})),
+  new El('div', 'DDLOptions__option', 'stale')));
+const document = {body, documentElement,
+  querySelectorAll: s => documentElement.querySelectorAll(s),
+  querySelector: s => documentElement.querySelector(s)};
+const window = {getComputedStyle: el => el.style};
+const result = """ + read_js + r""";
+console.log(JSON.stringify(result));
+"""
+        proc = subprocess.run([node_bin, "-e", harness], check=True, capture_output=True, text=True)
+        self.assertEqual(json.loads(proc.stdout)["options"], ["right"])
+
+    def test_duplicate_menu_id_is_ambiguous_via_emitted_js(self):
+        node_bin = shutil.which("node")
+        if not node_bin:
+            self.skipTest("node is required to execute the emitted JS")
+        scripts = []
+
+        class CaptureTab:
+            def js(self, script):
+                scripts.append(script)
+                return {"status": "ok", "options": [], "scope": "none"}
+
+        with patch.object(solver.time, "sleep"):
+            solver._open_and_read_ddl(CaptureTab(), 0)
+        harness = _NODE_DOM_SHIM + r"""
+const body = new El('body');
+const documentElement = new El('html').append(body);
+const practice = new El('div', 'learning__angPracticeW');
+body.append(practice);
+const s0 = new El('div', 'DDLOptions__selected', '', {'aria-controls': 'duplicate'});
+practice.append(new El('div', 'DDLOptionsW').append(s0));
+body.append(new El('ul', 'DDLOptions__list', '', {id: 'duplicate'}).append(
+  new El('li', 'DDLOptions__listItem', 'right')),
+  new El('ul', 'DDLOptions__list', '', {id: 'duplicate'}).append(
+  new El('li', 'DDLOptions__listItem', 'stale')));
+const document = {body, documentElement,
+  querySelectorAll: s => documentElement.querySelectorAll(s),
+  querySelector: s => documentElement.querySelector(s)};
+const window = {getComputedStyle: el => el.style};
+const result = """ + scripts[1] + r""";
+console.log(JSON.stringify(result));
+"""
+        proc = subprocess.run([node_bin, "-e", harness], check=True, capture_output=True, text=True)
+        result = json.loads(proc.stdout)
+        self.assertEqual((result["scope"], result["options"]), ("none", []))
+
+    def test_active_descendant_change_during_pick_does_not_click_stale_menu(self):
+        node_bin = shutil.which("node")
+        if not node_bin:
+            self.skipTest("node is required to execute the emitted JS")
+        captured = []
+
+        class CaptureTab:
+            def js(self, script):
+                captured.append(script)
+                if "practiceData" in script and "answerLists" in script:
+                    return {"text": "Pick __", "lists": [["alpha", "beta"]],
+                            "domCount": 1, "domLists": [[]]}
+                if "closeOtherMenus(s," in script:
+                    return {"status": "ok", "selected": "", "selectedPlaceholder": True}
+                if "options: res.items.map(getOptText)" in script:
+                    return {"status": "ok", "scope": "portal-linked", "selected": "",
+                            "selectedPlaceholder": True, "options": ["alpha", "beta"]}
+                if "const wantText =" in script:
+                    return {"clicked": 0, "selected": "", "selectedPlaceholder": True}
+                if "return getTriggers().map(" in script:
+                    return [{"selected": "", "selectedPlaceholder": True}]
+                return None
+
+        with patch.object(solver, "ask_json", return_value={"1": "alpha"}), \
+             patch.object(solver.time, "sleep"):
+            solver.solve_fitb(CaptureTab(), "")
+        pick_js = next(s for s in captured if "const wantText =" in s)
+        harness = _NODE_DOM_SHIM + r"""
+const body = new El('body');
+const documentElement = new El('html').append(body);
+const practice = new El('div', 'learning__angPracticeW');
+body.append(practice);
+const s0 = new El('div', 'DDLOptions__selected', '', {'aria-activedescendant': 'other-active'});
+practice.append(new El('div', 'DDLOptionsW').append(s0));
+let clicked = false;
+const stale = new El('li', 'DDLOptions__listItem', 'alpha', {id: 'old-active'});
+stale.onclick = () => { clicked = true; };
+body.append(new El('ul', 'DDLOptions__list').append(stale, new El('li', 'DDLOptions__listItem', 'beta')),
+  new El('ul', 'DDLOptions__list').append(new El('li', 'DDLOptions__listItem', 'gamma', {id: 'other-active'})));
+const document = {body, documentElement,
+  querySelectorAll: s => documentElement.querySelectorAll(s),
+  querySelector: s => documentElement.querySelector(s)};
+const window = {getComputedStyle: el => el.style};
+const result = """ + pick_js + r""";
+console.log(JSON.stringify({clicked, result}));
+"""
+        proc = subprocess.run([node_bin, "-e", harness], check=True, capture_output=True, text=True)
+        result = json.loads(proc.stdout)
+        self.assertFalse(result["clicked"])
+        self.assertEqual(result["result"]["clicked"], 0)
+
+    def test_active_descendant_menu_option_is_clicked_by_emitted_pick_js(self):
+        node_bin = shutil.which("node")
+        if not node_bin:
+            self.skipTest("node is required to execute the emitted JS")
+        captured = []
+
+        class CaptureTab:
+            def js(self, script):
+                captured.append(script)
+                if "practiceData" in script and "answerLists" in script:
+                    return {"text": "Pick __", "lists": [["alpha", "beta"]],
+                            "domCount": 1, "domLists": [[]]}
+                if "closeOtherMenus(s," in script:
+                    return {"status": "ok", "selected": "", "selectedPlaceholder": True}
+                if "options: res.items.map(getOptText)" in script:
+                    return {"status": "ok", "scope": "portal-linked", "selected": "",
+                            "selectedPlaceholder": True, "options": ["alpha", "beta"]}
+                if "const wantText =" in script:
+                    return {"clicked": 0, "selected": "", "selectedPlaceholder": True}
+                if "return getTriggers().map(" in script:
+                    return [{"selected": "", "selectedPlaceholder": True}]
+                return None
+
+        with patch.object(solver, "ask_json", return_value={"1": "alpha"}), \
+             patch.object(solver.time, "sleep"):
+            solver.solve_fitb(CaptureTab(), "")
+        pick_js = next(s for s in captured if "const wantText =" in s)
+        harness = _NODE_DOM_SHIM + r"""
+const body = new El('body');
+const documentElement = new El('html').append(body);
+const practice = new El('div', 'learning__angPracticeW');
+body.append(practice);
+const s0 = new El('div', 'DDLOptions__selected', '', {'aria-activedescendant': 'active'});
+practice.append(new El('div', 'DDLOptionsW').append(s0));
+let clicked = false;
+const option = new El('li', 'DDLOptions__listItem', 'alpha', {id: 'active'});
+option.onclick = () => { clicked = true; s0.innerText = s0.textContent = 'alpha'; };
+body.append(new El('ul', 'DDLOptions__list').append(option, new El('li', 'DDLOptions__listItem', 'beta')));
+const document = {body, documentElement,
+  querySelectorAll: s => documentElement.querySelectorAll(s),
+  querySelector: s => documentElement.querySelector(s)};
+const window = {getComputedStyle: el => el.style};
+const result = """ + pick_js + r""";
+console.log(JSON.stringify({clicked, result}));
+"""
+        proc = subprocess.run([node_bin, "-e", harness], check=True, capture_output=True, text=True)
+        result = json.loads(proc.stdout)
+        self.assertTrue(result["clicked"])
+        self.assertEqual(result["result"]["selected"], "alpha")
+        self.assertEqual(result["result"]["scope"], "portal-linked")
 
     def test_pick_js_fails_closed_in_node_when_target_option_disappears(self):
         node_bin = shutil.which("node")

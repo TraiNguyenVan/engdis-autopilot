@@ -1023,23 +1023,37 @@ _FITB_DOM_JS = r"""
   const getPortalOwner = (el) => {
     const allTriggers = getTriggers();
     if (!allTriggers.length) return null;
+    // An ARIA active descendant identifies a list even when that list has no
+    // id. Require one unique option id within one recognized menu and collect
+    // all claims together, so conflicting references remain ambiguous.
+    const MENU_SEL = '.DDLOptions__list, [role="listbox"]';
+    const menu = el.closest && el.closest(MENU_SEL);
+    const menuOptions = menu ? [...menu.querySelectorAll(OPT_SEL)]
+      .filter(option => option.closest && option.closest(MENU_SEL) === menu) : [];
+    const idCounts = new Map();
+    for (const item of document.querySelectorAll('[id]')) {
+      const id = String(item.id || '');
+      if (id) idCounts.set(id, (idCounts.get(id) || 0) + 1);
+    }
     let anc = el;
     const portalIds = new Set();
     const labelledBy = new Set();
     while (anc && anc !== document.body && anc !== document.documentElement) {
-      if (anc.id) portalIds.add(String(anc.id));
+      if (anc.id && idCounts.get(String(anc.id)) === 1) portalIds.add(String(anc.id));
       for (const attr of ['aria-labelledby', 'data-trigger', 'data-for', 'data-owner', 'data-ddl-for']) {
         const v = getAttr(anc, attr);
         if (v) String(v).split(/\s+/).filter(Boolean).forEach(x => labelledBy.add(x.replace(/^#/, '')));
       }
       anc = anc.parentElement;
     }
-    if (!portalIds.size && !labelledBy.size) return null;
     const owners = new Set();
     for (const trig of allTriggers) {
       const scopes = [trig, ...getContainers(trig)];
       for (const sc of scopes) {
-        if (sc && sc.id && labelledBy.has(String(sc.id))) owners.add(trig);
+        const active = getAttr(sc, 'aria-activedescendant');
+        if (active && idCounts.get(String(active)) === 1 &&
+            menuOptions.some(option => String(option.id || '') === String(active))) owners.add(trig);
+        if (sc && sc.id && idCounts.get(String(sc.id)) === 1 && labelledBy.has(String(sc.id))) owners.add(trig);
         for (const attr of ['aria-controls', 'aria-owns', 'data-target', 'data-dropdown', 'data-menu', 'data-portal']) {
           const raw = getAttr(sc, attr);
           if (!raw) continue;
