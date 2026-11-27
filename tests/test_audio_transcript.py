@@ -110,9 +110,10 @@ class AttachTranscriptTests(unittest.TestCase):
         tab = FakeTab()
         solver.media_url(tab)
         solver.media_url(tab, prefer_last=True)
+        self.assertIn("const srcEls = [...document.querySelectorAll('audio,video')].filter(x => x.currentSrc || x.src);", seen_js[0])
         self.assertIn("practice.length ? practice : (resource.length ? resource : all)", seen_js[0])
         self.assertIn("return 0 ? urls[urls.length - 1] : urls[0];", seen_js[0])
-        self.assertIn("const visEls = allEls.filter(isVis);", seen_js[1])
+        self.assertIn("const visEls = srcEls.filter(isVis);", seen_js[1])
         self.assertIn("return 1 ? urls[urls.length - 1] : urls[0];", seen_js[1])
 
     def test_handles_transcript_for_exception_gracefully(self):
@@ -413,6 +414,23 @@ class SolverMainTranscriptTests(unittest.TestCase):
         self.assertIn("Legacy bounded audio", s1)
         self.assertIn("Legacy bounded audio", s2)
         self.assertNotIn("Legacy bounded audio", s3)
+
+    def test_resolve_task_transcript_does_not_reuse_previous_clip_when_new_clip_fails(self):
+        tab = Mock()
+        state = {}
+        with patch.object(solver, "dom_transcript", return_value=None), \
+             patch.object(solver, "media_url", side_effect=[
+                 "https://cdn.example.com/a/clip1.mp3",
+                 "https://cdn.example.com/a/clip1.mp3",
+                 "https://cdn.example.com/a/clip2.mp3",
+                 "https://cdn.example.com/a/clip2.mp3",
+             ]), \
+             patch.object(solver, "transcript_for", side_effect=["Clip 1 transcript", ""]):
+            s1 = solver.resolve_task_transcript(tab, "Q1", ("L1", "Step 2: Practice"), state)
+            s2 = solver.resolve_task_transcript(tab, "Q2", ("L1", "Step 2: Practice"), state)
+        self.assertIn("Clip 1 transcript", s1)
+        self.assertNotIn("Clip 1 transcript", s2)
+        self.assertEqual(s2, "Q2")
 
 
 if __name__ == "__main__":

@@ -252,10 +252,17 @@ def resolve_task_transcript(t, base_src, activity_key, retained_state, label="--
     if retained_state.get("key") != activity_key:
         retained_state["key"] = activity_key
         retained_state["block"] = ""
+        retained_state["media"] = None
+    cur_media = media_url(t, prefer_last=True) if prefer_last_media else media_url(t)
     task_src = attach_transcript(t, base_src, label=label, prefer_last_media=prefer_last_media)
     block = _extract_transcript_block(task_src)
     if block:
         retained_state["block"] = block
+        retained_state["media"] = cur_media
+        return task_src
+    if cur_media and cur_media != retained_state.get("media"):
+        retained_state["block"] = ""
+        retained_state["media"] = cur_media
         return task_src
     if retained_state.get("block"):
         return (base_src or "") + "\n\n" + retained_state["block"]
@@ -310,9 +317,9 @@ def media_url(t, prefer_last=False):
     return t.js(f"""(() => {{
       const isVis = el => !el.closest('.hide, [hidden]') && getComputedStyle(el).display !== 'none';
       const pick = list => list.map(x => x.currentSrc || x.src).filter(Boolean);
-      const allEls = [...document.querySelectorAll('audio,video')];
-      const visEls = allEls.filter(isVis);
-      const pool = visEls.length ? visEls : allEls;
+      const srcEls = [...document.querySelectorAll('audio,video')].filter(x => x.currentSrc || x.src);
+      const visEls = srcEls.filter(isVis);
+      const pool = visEls.length ? visEls : srcEls;
       const practice = pick(pool.filter(x => x.closest('ed-la-practicearea, #pmContainer')));
       const resource = pick(pool.filter(x => x.closest('ed-la-resourcearea')));
       const all = pick(pool);
