@@ -5,6 +5,15 @@ from unittest.mock import patch
 
 
 class TestConfig(unittest.TestCase):
+    def setUp(self):
+        import config
+        self._saved_config = dict(config.__dict__)
+
+    def tearDown(self):
+        import config
+        config.__dict__.clear()
+        config.__dict__.update(self._saved_config)
+
     def test_defaults(self):
         with patch.dict(os.environ, {"ED_SKIP_DOTENV": "1"}, clear=True):
             import config
@@ -13,6 +22,7 @@ class TestConfig(unittest.TestCase):
             self.assertEqual(config.LLM_URL, "https://api.openai.com/v1/chat/completions")
             self.assertEqual(config.LLM_KEY, "")
             self.assertEqual(config.LLM_MODELS, ["gpt-4o-mini"])
+            self.assertEqual(config.LLM_TIMEOUT, 15)
             self.assertEqual(config.SCRATCH, "/opt/data/cache/scratch/ed22u1")
             self.assertEqual(config.REPORT_DIR, ".")
             self.assertEqual(config.CRED_PATH, "")

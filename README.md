@@ -21,17 +21,17 @@ The courseware's scored assessment is the **Assessment Center exam** (midterm, f
 
 ### Assessment Center prompt
 
-Assessment Center automation and its safeguards are **unverified**; there is no Assessment Center fixture or verified run. The current code can select the wrong tab, submit without verifying all answers or completion, and set progress unexpectedly. Manual monitoring cannot guarantee interception, including during a continuous background run. We recommend not using `auto.py` on a real exam until these risks are fixed and the assessment path is verified. The bootstrap enables a fake microphone, so it is not suitable for real speaking answers.
+Assessment Center automation and its safeguards are **unverified**; there is no captured live exam fixture or verified live run. The current code has explicit assessment-mode and tab-change guards, but cannot guarantee that every answer or final score is correct, and a narrow check-to-input race remains. We recommend not using `auto.py` on a real exam until the path is verified. Manual monitoring cannot guarantee interception of an automatic action. The bootstrap enables a fake microphone, so it is not suitable for real speaking answers.
 
-> `/engdis-autopilot Help me with my Assessment Center <EXAM_TYPE>. Before launch, check that port 9225 and ~/.ed-profile are free (if in use, stop and tell me). If necessary details are unclear, ask me in a grouped question. Start visible local Chrome with python3 bootstrap_browser.py --headed --port 9225 --profile ~/.ed-profile, keep it running, and verify the window and CDP connection; if Chrome cannot start, stop and tell me. If the exam requires a real microphone, tell me before starting the attempt: the bootstrap uses a fake audio device. Help me log in if needed, then wait for me to open the exam myself and authorize the attempt. Explain the unverified automation risks above and recommend against using auto.py on a real exam until they are fixed and verified. If I authorize supervised automation, verify the target tab before attaching with auto.py and monitor the run; verify each answer is registered before advancing, stop on ambiguity, and submit only after all answers are verified. These are desired precautions, not safeguards the current code guarantees; manual monitoring may not intercept automatic submission or progress changes. Do not use cover.py, Docker, headless mode, or --unattended.`
+> `/engdis-autopilot Help me with my Assessment Center <EXAM_TYPE>. If necessary details are unclear, ask me first. Check that port 9225 and ~/.ed-profile are free; if either is in use, stop and tell me. Start visible local Chrome with python3 bootstrap_browser.py --headed --port 9225 --profile ~/.ed-profile and verify the window and CDP connection. If Chrome cannot start, stop and tell me. If the exam needs a real microphone, tell me before starting; the bootstrap uses a fake audio device. Help me log in, then wait for me to open the exam myself and authorize the attempt. Explain that assessment automation remains unverified and recommend against using auto.py on a real attempt until verified. If I authorize supervised automation, attach to the exam tab with python3 auto.py --assessment, monitor the run, and stop on ambiguity or unexpected behavior. Verify answers and results independently; do not claim monitoring or the software guarantees correctness. Do not use cover.py, Docker, headless mode, or --unattended.`
+
+Assessment mode must be explicitly requested with `python3 auto.py --assessment` (or `ED_ASSESSMENT=1`). If assessment and lesson dropdown signals coexist, the runner stops rather than navigating or submitting.
 
 ### Assessment Center boundaries
 
 - The Assessment Center is separate from the unit/lesson tree. `cover.py` cannot open it.
-- `driver.open_tab` prefers a `learningArea` page or falls back to the first page; it does not identify the requested Assessment Center tab reliably.
-- `auto.py` checks some unanswered states, but does not verify all answers or completion before its last-question submission path. It can click submission, confirm a modal, and call progress setters even when the score is unknown. It does not enforce the desired fail-closed safeguards for an exam.
-- This repo has no Assessment Center fixture or verified run. Unit lesson tests passing says nothing about Assessment Center behavior. A visible browser, background monitoring, or explicit authorization does not fix these limitations.
-- The user opens the exam and authorizes the attempt; supervision and authorization do not ensure the desired safeguards are enforced.
+- Offline synthetic fixtures do not establish live Assessment Center behavior. Unit lesson tests passing says nothing about Assessment Center behavior.
+- The user opens the exam and authorizes the attempt. Keep the browser visible and stop on stalls or ambiguous questions; supervision and authorization do not guarantee correct behavior.
 - Do not include private score anecdotes or percentages in the public README or PR text.
 
 ---
@@ -193,6 +193,7 @@ flowchart TD
 
 - **Docker-Enforced CDP Automation**: Direct DOM instrumentation, interaction simulation, and navigation over Chrome DevTools Protocol inside isolated containers.
 - **Multimodal LLM Solvers**: Solves text, multiple-choice, fill-in-the-blank, and drag-and-drop tasks using OpenAI-compatible endpoints (`OPENAI_MODEL`).
+- **LLM timeout and DNS limitation**: `ED_LLM_TIMEOUT` sets the per-attempt deadline in seconds (default 15). A request can return on timeout while its daemon fetch worker is still blocked in the system DNS resolver, which Python cannot cancel by closing the socket. Repeated stalled lookups can accumulate workers until DNS returns or the process exits; this is not a bounded DNS cleanup guarantee. Ordinary socket and response timeouts still trigger failover/retries.
 - **Unified Audio Transcription**: Transcribes listening exercises via base64 audio chat completions—no separate Whisper service needed.
 - **Low-RAM Containment**: Strict container limits (1280 MB RAM, 256 MB SHM) and Chromium heap capping for low-spec hosts.
 - **Dual Execution Modes**: Autonomous Agent Yield mode (`rc=6` on stalls) for interactive agent pairing, plus Unattended mode (`--unattended` / `ED_UNATTENDED=1`) for headless non-blocking runs.
