@@ -38,7 +38,7 @@ class TestAnswerGuard(unittest.TestCase):
     def test_main_does_not_advance_unanswered_test(self):
         class Tab:
             def js(self, script):
-                if 'if (app?.isTestEnv)' in script:
+                if script == auto.IS_TEST_JS:
                     return True
                 return 0
 

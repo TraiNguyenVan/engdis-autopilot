@@ -69,6 +69,7 @@ class TestClassificationTests(unittest.TestCase):
     def test_handle_test_redirects_speaking_widget(self):
         tab = Mock()
         tab.js.side_effect = [
+            False,                                   # standard lesson, not assessment
             "",                                      # audio/video query (no media)
             "openSpeech__btn openSpeech__btnStart",  # speak_widget detection
         ]

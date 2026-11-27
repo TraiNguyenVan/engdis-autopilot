@@ -186,6 +186,93 @@ class TargetTabAndSessionTests(unittest.TestCase):
                              lists={"ed-la-dropdownlist": [{}, {}]})["res"]
         self.assertTrue(result)
 
+    def test_assessment_url_with_dropdown_is_never_a_lesson(self):
+        result = run_node_js(auto.IS_TEST_AREA_JS,
+                             url="https://ed22.engdis.com/assessment/active",
+                             lists={"ed-la-dropdownlist": [{}, {}]})["res"]
+        self.assertTrue(result)
+
+    def test_assessment_with_dropdown_has_unknown_submission_state(self):
+        for url in ("https://ed22.engdis.com/Runtime/TestArea.html", "https://ed22.engdis.com/assessment/active"):
+            with self.subTest(url=url):
+                state = run_node_js(auto.ASSESSMENT_SUBMIT_STATE_JS, url=url,
+                                    lists={"ed-la-dropdownlist": [{}, {}]})["res"]
+                self.assertEqual(state, "unknown")
+
+    def test_authorized_assessment_with_dropdown_stops_before_lesson_navigation(self):
+        for url in ("https://ed22.engdis.com/Runtime/TestArea.html", "https://ed22.engdis.com/assessment/active"):
+            with self.subTest(url=url):
+                class Tab:
+                    def js(self, expr):
+                        return run_node_js(expr, url=url, lists={"ed-la-dropdownlist": [{}, {}]},
+                                           nodes={"app": {"__comp": {"componentInstance": {"navigationService": {}}}}})["res"]
+                tab = Tab()
+                state = {"unit": "", "lesson": "", "step": "Practice", "counter": "1", "total": "1", "body": ""}
+                with patch.dict(os.environ, {"ED_ASSESSMENT": "1"}), \
+                     patch.object(auto, "select_target_tab", return_value=tab), \
+                     patch.object(auto, "ensure_session", return_value=True), \
+                     patch.object(auto, "st", return_value=state), \
+                     patch.object(auto, "update_live_status", side_effect=AssertionError("entered lesson flow")):
+                    with self.assertRaises(SystemExit) as ctx:
+                        auto.main(max_iter=1)
+                self.assertEqual(ctx.exception.code, 6)
+
+    def test_assessment_path_session_and_submit_predicates_agree(self):
+        url = "https://ed22.engdis.com/assessment/active"
+        app = {"__comp": {"componentInstance": {"navigationService": {}}}}
+        self.assertTrue(run_node_js(auto.IS_LIVE_ASSESSMENT_SESSION_JS, url=url, nodes={"app": app})["res"])
+        self.assertEqual(run_node_js(auto.ASSESSMENT_SUBMIT_STATE_JS, url=url, nodes={"app": app})["res"], "unknown")
+
+    def test_handle_test_refuses_ambiguous_assessment_before_solving(self):
+        for url in ("https://ed22.engdis.com/Runtime/TestArea.html", "https://ed22.engdis.com/assessment/active"):
+            with self.subTest(url=url):
+                class Tab:
+                    def js(self, expr):
+                        return run_node_js(expr, url=url, lists={"ed-la-dropdownlist": [{}, {}]})["res"]
+                with patch.object(auto.solver, "do_task", side_effect=AssertionError("solver ran")), \
+                     patch.object(auto.solver, "dom_transcript", side_effect=AssertionError("transcript ran")), \
+                     patch.object(auto, "click", side_effect=AssertionError("clicked")):
+                    result = auto.handle_test(Tab(), "question")
+                self.assertEqual(result, "test-unanswered: completeness-unknown")
+
+    def test_test_environment_marker_with_dropdown_is_ambiguous_assessment(self):
+        app = {"__comp": {"componentInstance": {"isTestEnv": True}}}
+        kwargs = {"nodes": {"app": app}, "lists": {"ed-la-dropdownlist": [{}, {}]}}
+        self.assertTrue(run_node_js(auto.IS_TEST_AREA_JS, **kwargs)["res"])
+        self.assertEqual(run_node_js(auto.ASSESSMENT_SUBMIT_STATE_JS, **kwargs)["res"], "unknown")
+
+    def test_assessment_path_intro_and_part_navigation_uses_assessment_identity(self):
+        url = "https://ed22.engdis.com/assessment/active"
+        app = {"__comp": {"componentInstance": {"navigationService": {
+            "__recordSelectedChanged": True,
+            "_stepsList": {"SelectedIndex": 0, "Children": [
+                {"NodeId": "intro", "Name": "Intro"}, {"NodeId": "s1", "Name": "Part 1"}]},
+            "_lessonsList": {"SelectedIndex": 0, "Children": [
+                {"NodeId": "l1", "Name": "Listening 1"}, {"NodeId": "l2", "Name": "Listening 2"}]},
+        }}}}
+        self.assertEqual(run_node_js(auto.ADVANCE_TEST_INTRO_STEP_JS, url=url, nodes={"app": app})["res"], 1)
+        self.assertEqual(run_node_js(auto.ADVANCE_NEXT_PART_JS, url=url, nodes={"app": app})["res"], 1)
+
+    def test_readme_assessment_prompt_requires_explicit_flag(self):
+        from pathlib import Path
+        readme = (Path(auto.__file__).parent / "README.md").read_text(encoding="utf-8")
+        section = readme.split("### Assessment Center prompt", 1)[1].split("### Assessment Center boundaries", 1)[0]
+        self.assertIn("python3 auto.py --assessment", section)
+
+    def test_default_main_refuses_assessment_path_with_dropdown(self):
+        class Tab:
+            def js(self, expr):
+                return run_node_js(expr, url="https://ed22.engdis.com/assessment/active",
+                                   lists={"ed-la-dropdownlist": [{}, {}]})["res"]
+        with patch.dict(os.environ, {"ED_ASSESSMENT": ""}), \
+             patch.object(auto.sys, "argv", ["auto.py"]), \
+             patch.object(auto.edlib, "tab", return_value=Tab()), \
+             patch.object(auto.login, "ensure_login", side_effect=AssertionError("login was invoked")), \
+             patch.object(auto, "st", side_effect=AssertionError("lesson flow was entered")):
+            with self.assertRaises(SystemExit) as ctx:
+                auto.main(max_iter=1)
+        self.assertEqual(ctx.exception.code, 6)
+
     def test_select_target_tab_prefers_testarea_tab_over_learningarea_when_requested(self):
         fake_targets = [
             {

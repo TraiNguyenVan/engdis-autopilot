@@ -206,11 +206,11 @@ def next_intro_attempt(tries, key, limit=3):
 _ORIG_EDLIB_TAB = edlib.tab
 
 IS_TEST_AREA_JS = """(() => {
-    if (/TestArea\\.html/i.test(window.location?.href || '')) return true;
-    if (document.querySelectorAll('ed-la-dropdownlist').length > 0) return false;
-    if (document.querySelector('#learning__tasksNav_submitTest')) return true;
+    if (/TestArea\\.html|\\/assessment/i.test(window.location?.href || '')) return true;
     const app = window.ng?.probe?.(document.querySelector('app'))?.componentInstance;
-    return Boolean(app?.isTestEnv);
+    if (app?.isTestEnv) return true;
+    if (document.querySelectorAll('ed-la-dropdownlist').length > 0) return false;
+    return Boolean(document.querySelector('#learning__tasksNav_submitTest'));
 })()"""
 
 IS_LIVE_ASSESSMENT_SESSION_JS = """(() => {
@@ -220,7 +220,7 @@ IS_LIVE_ASSESSMENT_SESSION_JS = """(() => {
     if (/Member Login/i.test(body) && !/Hello /i.test(body)) return false;
     if (document.querySelectorAll('ed-la-dropdownlist').length > 0) return false;
     const app = window.ng?.probe?.(document.querySelector('app'))?.componentInstance;
-    const onTestArea = Boolean(app?.isTestEnv) || /TestArea\\.html/i.test(href) || Boolean(document.querySelector('#learning__tasksNav_submitTest'));
+    const onTestArea = Boolean(app?.isTestEnv) || /TestArea\\.html|\\/assessment/i.test(href) || Boolean(document.querySelector('#learning__tasksNav_submitTest'));
     if (!onTestArea) return false;
     const hasNav = Boolean(app?.navigationService);
     const hasTestDom = Boolean(
@@ -294,7 +294,7 @@ _SECTION_KEY_HELPER_JS = """
 ADVANCE_NEXT_PART_JS = f"""(() => {{
     if (document.querySelectorAll('ed-la-dropdownlist').length > 0) return 0;
     const app = window.ng?.probe?.(document.querySelector('app'))?.componentInstance;
-    const onTestArea = Boolean(app?.isTestEnv) || /TestArea\\.html/i.test(window.location?.href || '');
+    const onTestArea = Boolean(app?.isTestEnv) || /TestArea\\.html|\\/assessment/i.test(window.location?.href || '');
     if (!onTestArea) return 0;
     const nav = app?.navigationService;
     const lList = nav?._lessonsList;
@@ -324,7 +324,7 @@ ADVANCE_NEXT_PART_JS = f"""(() => {{
 ADVANCE_TEST_INTRO_STEP_JS = f"""(() => {{
     if (document.querySelectorAll('ed-la-dropdownlist').length > 0) return 0;
     const app = window.ng?.probe?.(document.querySelector('app'))?.componentInstance;
-    const onTestArea = Boolean(app?.isTestEnv) || /TestArea\\.html/i.test(window.location?.href || '');
+    const onTestArea = Boolean(app?.isTestEnv) || /TestArea\\.html|\\/assessment/i.test(window.location?.href || '');
     if (!onTestArea) return 0;
     const nav = app?.navigationService;
     const sList = nav?._stepsList;
@@ -430,10 +430,11 @@ const anyIncomplete = mcqUnanswered || ddlUnanswered || dndUnanswered
 return (anyIncomplete || !hasPositiveEvidence) ? 1 : 0;"""
 
 ASSESSMENT_SUBMIT_STATE_JS = f"""(() => {{
-    if (document.querySelectorAll('ed-la-dropdownlist').length > 0) return 'not-assessment';
     const href = String(window.location?.href || '');
     const app = window.ng?.probe?.(document.querySelector('app'))?.componentInstance;
-    const onTestArea = Boolean(app?.isTestEnv) || /TestArea\\.html/i.test(href) || Boolean(document.querySelector('#learning__tasksNav_submitTest'));
+    const urlAssessment = /TestArea\\.html|\\/assessment/i.test(href);
+    if (document.querySelectorAll('ed-la-dropdownlist').length > 0) return (urlAssessment || app?.isTestEnv) ? 'unknown' : 'not-assessment';
+    const onTestArea = Boolean(app?.isTestEnv) || urlAssessment || Boolean(document.querySelector('#learning__tasksNav_submitTest'));
     if (!onTestArea) return 'not-assessment';
 
     const nav = app?.navigationService;
@@ -527,7 +528,7 @@ IS_FINAL_ASSESSMENT_COMPLETE_JS = f"""(() => {{
     if (document.querySelectorAll('ed-la-dropdownlist').length > 0) return false;
     const href = String(window.location?.href || '');
     const app = window.ng?.probe?.(document.querySelector('app'))?.componentInstance;
-    const onTestArea = Boolean(app?.isTestEnv) || /TestArea\\.html/i.test(href) || Boolean(document.querySelector('#learning__tasksNav_submitTest'));
+    const onTestArea = Boolean(app?.isTestEnv) || /TestArea\\.html|\\/assessment/i.test(href) || Boolean(document.querySelector('#learning__tasksNav_submitTest'));
     if (!onTestArea) return false;
 
     const widgets = document.querySelectorAll(
@@ -684,7 +685,7 @@ def ensure_session(t, assessment_locked=False):
 
 
 def is_test_area(t):
-    """True when running inside Assessment Center (`TestArea.html`) without `ed-la-dropdownlist`."""
+    """Identify assessment signals; mixed lesson dropdowns remain ambiguous, not lessons."""
     return bool(t.js(IS_TEST_AREA_JS))
 
 
@@ -856,6 +857,8 @@ def handle_branch(t, src):
 
 def handle_test(t, src, unit_handler=None, lesson_name=""):
     """Answer a test question set, submit on the last one."""
+    if is_test_area(t) and t.js("(() => document.querySelectorAll('ed-la-dropdownlist').length > 0)()"):
+        return "test-unanswered: completeness-unknown"
     # Listening tests score 40% if answered blind; transcribe the audio once per test.
     if "[TRANSCRIPT]" not in src:
         # 1. Try DOM transcript first (instant, free)
@@ -1097,6 +1100,9 @@ def main(max_iter=120):
             sys.exit(6)
         elif not cur_test_area and assessment_mode:
             print("ASSESSMENT-TAB-LOST — left TestArea.html; stopping without touching other views")
+            sys.exit(6)
+        if cur_test_area and t.js("(() => document.querySelectorAll('ed-la-dropdownlist').length > 0)()"):
+            print("ASSESSMENT-AMBIGUOUS-DROPDOWNS — stopping without lesson navigation")
             sys.exit(6)
         if "Member Login" in (s.get("body") or ""):
             if assessment_mode:
