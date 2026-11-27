@@ -11,6 +11,15 @@ class TestSkillValidity(unittest.TestCase):
     def test_skill_file_exists(self):
         self.assertTrue(os.path.exists(SKILL_PATH), f"Missing {SKILL_PATH}")
 
+    def test_operational_guardrails(self):
+        with open(SKILL_PATH, "r", encoding="utf-8") as f:
+            content = f.read()
+        self.assertIn("two lines: username, then password", content)
+        self.assertNotIn("`username:password` file", content)
+        self.assertIn("unblocked lessons", content)
+        self.assertNotIn("non-speaking lessons remain", content)
+        self.assertIn("small non-critical run", content)
+
     def test_skill_frontmatter(self):
         with open(SKILL_PATH, "r", encoding="utf-8") as f:
             content = f.read()

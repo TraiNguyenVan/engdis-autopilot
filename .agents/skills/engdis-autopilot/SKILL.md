@@ -25,6 +25,7 @@ Operational procedures for AI coding agents running, diagnosing, and repairing t
 
 - **Routine coursework** (lessons, practice, and **unit lesson tests**): Unit lesson tests are **ungraded** and only affect unit completion percentage. Run via Docker headless (`docker compose run --rm engdis` or `engdis_inspect`) or `--headed` locally if watching. Do not retake a passed unit lesson test (`--force`, `--retest`) unless intentionally replacing its percentage.
 - **Agent Yield vs Unattended**: Default to Agent Yield mode (`cover.py` exits `rc=6` on stalls so you can inspect/patch). Reserve `--unattended` / `ED_UNATTENDED=1` for routine coverage when skipping stalled tasks is acceptable. Neither `cover.py` nor `solver.py` guarantees 100% completion or scores.
+- Expect first-run friction across machines: browser/CDP availability, codecs, login state, model endpoints, and LMS timing vary. Start with a small non-critical run and confirm progress and results before scaling up.
 - **Graded Assessment Center exams** (midterm, final, placement): Live outside the unit/lesson tree; `cover.py` cannot open them. This path is **unverified** (no Assessment Center fixture or verified live run in this repo—do not imply it is proven safe).
   1. Ask for any unclear/missing details first; check that port `9225` and `~/.ed-profile` are not already in use.
   2. Start visible local Chrome: `python3 bootstrap_browser.py --headed --port 9225 --profile ~/.ed-profile`, and verify the window and CDP connection.
@@ -37,7 +38,7 @@ Operational procedures for AI coding agents running, diagnosing, and repairing t
 - **Dual Course Guarantee (Advanced 2 & 3)**: All automation logic, selectors, and solvers must work across both Advanced 2 and Advanced 3 curricula without regression. Never remove existing widget handlers.
 - **Docker & Docker Compose**: Preferred runtime for routine coursework. Packages Chromium with required audio codecs, fonts, and memory limits.
 - **Credentials & LLM Config (`.env` / `config.py`)**:
-  - Auth: `ED_USER`, `ED_PASS` (or `ED_CRED` pointing to a `username:password` file).
+  - Auth: `ED_USER`, `ED_PASS` (or `ED_CRED` pointing to a protected file with two lines: username, then password).
   - LLM: `OPENAI_API_KEY`, `OPENAI_BASE_URL`, `OPENAI_MODEL` (supports comma-separated fallback list in `LLM_MODELS`).
   - Listening STT (optional, recommended): `GROQ_API_KEY`, `GROQ_BASE_URL`, `GROQ_WHISPER_MODEL` (default `whisper-large-v3-turbo`).
   - Course/Runtime: `ED_COURSE`, `ED_CDP_PORT` (default `9225`), `ED_DRY_RUN`, `ED_SCRATCH`, `ED_REPORT_DIR`.
@@ -133,7 +134,7 @@ When assessment displays `"Your test score is: 100%"` or `"Review your answers"`
 ### 10. Autonomous Agent Yield & Hot-Fix Protocol
 The harness halts and signals coding agents with exit code `rc=6` and `[AGENT-ACTION-REQUIRED]` on `stderr` when:
 1. **Exercise Stall**: Any exercise fails to advance for 4 consecutive ticks (`logs/fixtures/stuck_*.json` is dumped).
-2. **Under-Completion Gate**: The supervisor batch finishes, but one or more non-speaking lessons remain `< 100%` complete.
+2. **Under-Completion Gate**: The supervisor batch finishes, but one or more unblocked lessons remain `< 100%` complete. Lessons marked blocked are excluded from this gate; exclusion does not establish completion.
 
 **Fast-Forward Resumption**: When targeted with `--lesson="..."`, `auto.py` reads step progress from `ed-la-dropdownlist` and fast-forwards to the first incomplete step. In `--unattended` / `ED_UNATTENDED=1` mode, stalls and under-completions are logged and the harness exits `rc=0`.
 
