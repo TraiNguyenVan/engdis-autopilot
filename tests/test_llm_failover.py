@@ -13,6 +13,7 @@ import threading
 import time
 import unittest
 import urllib.error
+import urllib.request
 from unittest.mock import patch
 
 import config
@@ -292,6 +293,149 @@ class AskTimeoutAndFailoverTests(unittest.TestCase):
         self.assertEqual((result, err), ("from-b", None))
         self.assertEqual([c["model"] for c in calls], ["model-a", "model-b"])
         self.assertEqual(sleeps, [])
+
+
+class ResolverTimeoutTests(unittest.TestCase):
+    def test_stalled_resolver_cannot_accumulate_unbounded_fetch_workers(self):
+        release = threading.Event()
+        entered = threading.Event()
+        calls = []
+        lock = threading.Lock()
+
+        def blocked_resolver(*args, **kwargs):
+            with lock:
+                calls.append(1)
+                if len(calls) >= 4:
+                    entered.set()
+            release.wait(10)
+            raise OSError("injected resolver failure")
+
+        def fetch():
+            try:
+                solver._fetch_with_deadline(urllib.request.Request("http://resolver.invalid/"), 0.1)
+            except (TimeoutError, OSError):
+                pass
+
+        with patch.object(socket, "getaddrinfo", side_effect=blocked_resolver):
+            callers = [threading.Thread(target=fetch) for _ in range(12)]
+            try:
+                for caller in callers:
+                    caller.start()
+                self.assertTrue(entered.wait(2))
+                for caller in callers:
+                    caller.join(2)
+                self.assertFalse(any(t.is_alive() for t in callers))
+                workers = [t for t in threading.enumerate() if t.name == "ed-llm-fetch"]
+                resolvers = [t for t in threading.enumerate() if t.name == "ed-llm-resolve"]
+                self.assertEqual(workers, [])
+                self.assertLessEqual(len(resolvers), 4)
+                self.assertLessEqual(len(calls), 4)
+            finally:
+                release.set()
+                for caller in callers:
+                    caller.join(2)
+                for worker in list(threading.enumerate()):
+                    if worker.name in ("ed-llm-fetch", "ed-llm-resolve"):
+                        worker.join(2)
+            self.assertFalse(any(t.name in ("ed-llm-fetch", "ed-llm-resolve")
+                                 for t in threading.enumerate()))
+        # Slots are reusable after the blocked resolver completes.
+        self.assertTrue(solver._resolve_with_deadline(
+            "127.0.0.1", 80, time.monotonic() + 1, 1))
+
+    def test_one_stalled_lookup_does_not_block_healthy_fallback(self):
+        release = threading.Event()
+        resolver_started = threading.Event()
+        original_getaddrinfo = socket.getaddrinfo
+
+        class Handler(http.server.BaseHTTPRequestHandler):
+            def log_message(self, format, *args):
+                pass
+
+            def do_POST(self):
+                self.rfile.read(int(self.headers["Content-Length"]))
+                body = json.dumps({"choices": [{"message": {"content": "healthy"}}]}).encode()
+                self.send_response(200)
+                self.send_header("Content-Length", str(len(body)))
+                self.end_headers()
+                self.wfile.write(body)
+
+        server = http.server.ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+        thread = threading.Thread(target=server.serve_forever, daemon=True)
+        thread.start()
+
+        def selective_resolver(host, *args, **kwargs):
+            if host == "stalled.invalid":
+                resolver_started.set()
+                release.wait(5)
+                raise OSError("injected resolver failure")
+            return original_getaddrinfo(host, *args, **kwargs)
+
+        try:
+            with patch.object(socket, "getaddrinfo", side_effect=selective_resolver):
+                start = time.monotonic()
+                with self.assertRaises((TimeoutError, urllib.error.URLError)) as caught:
+                    solver._fetch_with_deadline(urllib.request.Request("http://stalled.invalid/"), 0.2)
+                if isinstance(caught.exception, urllib.error.URLError):
+                    self.assertIsInstance(caught.exception.reason, TimeoutError)
+                self.assertTrue(resolver_started.is_set())
+                req = urllib.request.Request(f"http://127.0.0.1:{server.server_port}/", data=b"{}")
+                body, err, _ = solver._fetch_with_deadline(req, 1)
+                self.assertIsNotNone(body)
+                self.assertEqual(json.loads(body or "{}")["choices"][0]["message"]["content"], "healthy")
+                self.assertIsNone(err)
+                self.assertLess(time.monotonic() - start, 1.2)
+        finally:
+            release.set()
+            server.shutdown()
+            server.server_close()
+            thread.join()
+            for worker in list(threading.enumerate()):
+                if worker.name == "ed-llm-resolve":
+                    worker.join(2)
+
+
+class TruncatedResponseTests(unittest.TestCase):
+    def test_truncated_length_delimited_sse_fails_over(self):
+        seen_models = []
+
+        class Handler(http.server.BaseHTTPRequestHandler):
+            def log_message(self, format, *args):
+                pass
+
+            def do_POST(self):
+                request = json.loads(self.rfile.read(int(self.headers["Content-Length"])))
+                seen_models.append(request["model"])
+                if request["model"] == "first":
+                    payload = b'data: {"choices":[{"delta":{"content":"partial"}}]}\n\n'
+                    self.send_response(200)
+                    self.send_header("Content-Length", str(len(payload) + 100))
+                    self.end_headers()
+                    self.wfile.write(payload)
+                    self.close_connection = True
+                else:
+                    payload = json.dumps({"choices": [{"message": {"content": "complete"}}]}).encode()
+                    self.send_response(200)
+                    self.send_header("Content-Length", str(len(payload)))
+                    self.end_headers()
+                    self.wfile.write(payload)
+
+        server = http.server.ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+        thread = threading.Thread(target=server.serve_forever, daemon=True)
+        thread.start()
+        try:
+            with patch.object(solver, "LLM_URL", f"http://127.0.0.1:{server.server_port}/"), \
+                 patch.object(solver, "LLM_MODELS", ["first", "second"]), \
+                 patch.object(solver, "LLM_TIMEOUT", 1), \
+                 patch.object(solver, "LLM_KEY", ""), \
+                 patch("builtins.print"):
+                answer = solver.ask("ping")
+        finally:
+            server.shutdown()
+            server.server_close()
+            thread.join()
+        self.assertEqual(answer, "complete")
+        self.assertEqual(seen_models, ["first", "second"])
 
 
 class TotalDeadlineStreamingTests(unittest.TestCase):
