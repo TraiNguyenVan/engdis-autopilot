@@ -3,7 +3,7 @@
 Drives own headless Chromium over CDP; answers via a cheap remote LLM.
 Prints one terse line per task.
 """
-import base64, json, os, subprocess, sys, time, urllib.request
+import base64, json, os, socket, subprocess, sys, threading, time, urllib.request
 
 import edlib
 import config
@@ -24,38 +24,131 @@ SCRATCH = config.SCRATCH
 
 
 # ---------- LLM ----------
-def _read_with_deadline(resp, deadline, timeout):
-    try:
-        reader = resp.read1 if hasattr(resp, "read1") else getattr(getattr(resp, "fp", None), "read1", None)
-        if reader is None:
-            data = resp.read()
-            if _monotonic() > deadline:
-                raise TimeoutError("LLM request exceeded %ss total timeout" % timeout)
-            return data
-        target = resp if hasattr(resp, "read1") else getattr(resp, "fp", None)
-        chunks = []
-        while True:
-            remaining = deadline - _monotonic()
-            if remaining <= 0:
-                raise TimeoutError("LLM request exceeded %ss total timeout" % timeout)
-            fp = getattr(target, "fp", None)
-            raw = getattr(fp, "raw", None)
-            sock = getattr(raw, "_sock", None)
-            if sock is not None and hasattr(sock, "settimeout"):
-                sock.settimeout(remaining)
-            chunk = reader(16384)
-            if not chunk:
-                break
-            chunks.append(chunk)
-        if _monotonic() > deadline:
+def _extract_sock(obj):
+    for candidate in (obj, getattr(obj, "fp", None)):
+        if candidate is None:
+            continue
+        fp = getattr(candidate, "fp", None)
+        for stream in (candidate, fp, getattr(fp, "raw", None), getattr(candidate, "raw", None)):
+            sock = getattr(stream, "_sock", None)
+            if sock is not None:
+                return sock
+    return None
+
+
+def _abort_response(resp):
+    if resp is None:
+        return
+    sock = _extract_sock(resp)
+    if sock is not None:
+        try:
+            sock.shutdown(socket.SHUT_RDWR)
+        except Exception:
+            pass
+        try:
+            sock.close()
+        except Exception:
+            pass
+    if hasattr(resp, "close"):
+        try:
+            resp.close()
+        except Exception:
+            pass
+
+
+def _read_with_deadline(resp, deadline, timeout, sink=None, allow_partial=False):
+    reader = resp.read1 if hasattr(resp, "read1") else getattr(getattr(resp, "fp", None), "read1", None)
+    if reader is None:
+        data = resp.read()
+        if sink is not None and data:
+            sink.append(data)
+        if _monotonic() > deadline and not allow_partial:
             raise TimeoutError("LLM request exceeded %ss total timeout" % timeout)
-        return b"".join(chunks)
-    finally:
-        if hasattr(resp, "close"):
+        return data
+    sock = _extract_sock(resp)
+    chunks = sink if sink is not None else []
+    while True:
+        remaining = deadline - _monotonic()
+        if remaining <= 0:
+            if allow_partial:
+                break
+            raise TimeoutError("LLM request exceeded %ss total timeout" % timeout)
+        if sock is not None and hasattr(sock, "settimeout"):
             try:
-                resp.close()
+                sock.settimeout(remaining)
             except Exception:
                 pass
+        chunk = reader(16384)
+        if not chunk:
+            break
+        chunks.append(chunk)
+    if _monotonic() > deadline and not allow_partial:
+        raise TimeoutError("LLM request exceeded %ss total timeout" % timeout)
+    return b"".join(chunks)
+
+
+def _fetch_with_deadline(req, timeout):
+    deadline = _monotonic() + timeout
+    state = {
+        "resp": None,
+        "body": None,
+        "http_err": None,
+        "err_chunks": [],
+        "exc": None,
+        "aborted": False,
+    }
+
+    def _worker():
+        resp = None
+        try:
+            resp = urllib.request.urlopen(req, timeout=timeout)
+            state["resp"] = resp
+            if state["aborted"]:
+                return
+            state["body"] = _read_with_deadline(resp, deadline, timeout).decode()
+        except urllib.error.HTTPError as e:
+            state["http_err"] = e
+            state["resp"] = e
+            if not state["aborted"]:
+                try:
+                    _read_with_deadline(e, deadline, timeout, sink=state["err_chunks"], allow_partial=True)
+                except Exception:
+                    pass
+        except Exception as e:
+            state["exc"] = e
+        finally:
+            if state["aborted"]:
+                _abort_response(state["resp"] or resp)
+            elif state["http_err"] is not None:
+                if hasattr(state["http_err"], "close"):
+                    try:
+                        state["http_err"].close()
+                    except Exception:
+                        pass
+            elif resp is not None and hasattr(resp, "close"):
+                try:
+                    resp.close()
+                except Exception:
+                    pass
+
+    worker = threading.Thread(target=_worker, daemon=True)
+    worker.start()
+    remaining = deadline - _monotonic()
+    if remaining > 0:
+        worker.join(remaining)
+    if worker.is_alive():
+        state["aborted"] = True
+        _abort_response(state["resp"])
+        if state["http_err"] is not None:
+            err_msg = b"".join(list(state["err_chunks"])).decode("utf-8", errors="replace")
+            return None, state["http_err"], err_msg
+        raise TimeoutError("LLM request exceeded %ss total timeout" % timeout)
+    if state["http_err"] is not None:
+        err_msg = b"".join(list(state["err_chunks"])).decode("utf-8", errors="replace")
+        return None, state["http_err"], err_msg
+    if state["exc"] is not None:
+        raise state["exc"]
+    return state["body"], None, ""
 
 
 def ask(prompt, audio_b64=None, max_tokens=800):
@@ -75,31 +168,25 @@ def ask(prompt, audio_b64=None, max_tokens=800):
             body = None
             for attempt in range(4):
                 try:
-                    deadline = _monotonic() + timeout
                     req = urllib.request.Request(LLM_URL, data=json.dumps(payload).encode(),
                                                 headers=headers)
-                    resp = urllib.request.urlopen(req, timeout=timeout)
-                    body = _read_with_deadline(resp, deadline, timeout).decode()
-                    break
-                except urllib.error.HTTPError as e:
-                    last = e
-                    err_msg = ""
-                    try:
-                        err_msg = e.read().decode("utf-8")
-                    except Exception:
-                        pass
-                    print("! llm %s (try %d/4 HTTP %s): %s | %s" % (model, attempt + 1, e.code, str(e)[:100], err_msg[:160]), flush=True)
-                    if e.code == 429:
-                        if "TPD" in err_msg or "tokens per day" in err_msg:
-                            print("! model %s daily token limit exhausted, switching" % model, flush=True)
+                    body, http_err, err_msg = _fetch_with_deadline(req, timeout)
+                    if http_err is not None:
+                        last = http_err
+                        print("! llm %s (try %d/4 HTTP %s): %s | %s" % (model, attempt + 1, http_err.code, str(http_err)[:100], err_msg[:160]), flush=True)
+                        if http_err.code == 429:
+                            if "TPD" in err_msg or "tokens per day" in err_msg:
+                                print("! model %s daily token limit exhausted, switching" % model, flush=True)
+                                break
+                            print("! model %s 429 RPM rate limited, backing off 8s..." % model, flush=True)
+                            time.sleep(8 * (attempt + 1))
+                        elif fast_failover:
+                            print("! model %s HTTP %s, failing over to next model" % (model, http_err.code), flush=True)
                             break
-                        print("! model %s 429 RPM rate limited, backing off 8s..." % model, flush=True)
-                        time.sleep(8 * (attempt + 1))
-                    elif fast_failover:
-                        print("! model %s HTTP %s, failing over to next model" % (model, e.code), flush=True)
-                        break
-                    elif attempt < 3:
-                        time.sleep(2 * (attempt + 1))
+                        elif attempt < 3:
+                            time.sleep(2 * (attempt + 1))
+                        continue
+                    break
                 except Exception as e:
                     last = e
                     print("! llm %s (try %d/4): %s" % (model, attempt + 1, str(e)[:140]), flush=True)

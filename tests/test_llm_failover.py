@@ -105,6 +105,26 @@ class ConfigLlmTimeoutTests(unittest.TestCase):
                 self.assertEqual(config.LLM_TIMEOUT, 4)
             self.assertEqual(config.LLM_TIMEOUT, 9)
 
+    def test_running_test_config_defaults_preserves_ed_llm_timeout_for_ask(self):
+        from tests import test_config
+
+        with _isolated_config_reload({"ED_SKIP_DOTENV": "1", "ED_LLM_TIMEOUT": "8"}, clear=True):
+            self.assertEqual(config.LLM_TIMEOUT, 8)
+            suite_result = unittest.TestResult()
+            test_config.TestConfig("test_defaults").run(suite_result)
+            self.assertEqual(config.LLM_TIMEOUT, 8)
+
+            fn, calls = _scripted_urlopen([_Resp("ok-after-test-defaults")])
+            with patch.object(solver.urllib.request, "urlopen", side_effect=fn), \
+                 patch.object(solver, "LLM_MODELS", ["model-a"]), \
+                 patch.object(solver, "LLM_URL", TEST_LLM_URL), \
+                 patch.object(solver, "LLM_KEY", "k"), \
+                 patch.object(solver, "LLM_TIMEOUT", solver._ConfigTimeout(8)), \
+                 patch("builtins.print"):
+                ans = solver.ask("hi")
+            self.assertEqual(ans, "ok-after-test-defaults")
+            self.assertEqual(calls[0]["timeout"], 8)
+
 
 class ComposeEnvPropagationTests(unittest.TestCase):
     def test_compose_yaml_declares_ed_llm_timeout_passthrough(self):
@@ -160,8 +180,6 @@ class AskTimeoutAndFailoverTests(unittest.TestCase):
         self.assertEqual(calls[0]["timeout"], 15)
 
     def test_solver_llm_timeout_patch_is_respected_even_when_matching_import_env(self):
-        # Regression test: even if solver was imported with ED_LLM_TIMEOUT=8 and
-        # config.LLM_TIMEOUT later became 15, patching solver.LLM_TIMEOUT=8 wins.
         with patch.object(config, "LLM_TIMEOUT", 15), \
              patch.object(solver, "LLM_TIMEOUT", 8):
             result, err, calls, _sleeps = self._run_ask([_Resp("ans")], ["model-a"])
@@ -277,11 +295,11 @@ class AskTimeoutAndFailoverTests(unittest.TestCase):
 
 
 class TotalDeadlineStreamingTests(unittest.TestCase):
-    def test_periodic_streaming_server_exceeding_total_deadline_fails_over(self):
+    def _run_loopback_scenario(self, slow_mode):
         seen_models = []
-        stop_trickle = threading.Event()
+        stop_drip = threading.Event()
 
-        class _TrickleHandler(http.server.BaseHTTPRequestHandler):
+        class _DripHandler(http.server.BaseHTTPRequestHandler):
             protocol_version = "HTTP/1.1"
 
             def log_message(self, fmt, *args):
@@ -292,22 +310,54 @@ class TotalDeadlineStreamingTests(unittest.TestCase):
                 req_body = json.loads(self.rfile.read(length).decode("utf-8"))
                 model = req_body["model"]
                 seen_models.append(model)
-                if model == "trickle-model":
-                    # Trickle SSE data every 0.2s for ~2.2s: socket never goes idle
-                    # for 1.0s, so inactivity timeout alone would NOT trigger.
-                    self.send_response(200)
-                    self.send_header("Content-Type", "text/event-stream")
-                    self.end_headers()
-                    for _ in range(11):
-                        if stop_trickle.is_set():
-                            break
-                        try:
-                            chunk = b'data: {"choices":[{"delta":{"content":"slow"}}]}\n\n'
-                            self.wfile.write(chunk)
+
+                if model == "slow-model":
+                    try:
+                        if slow_mode == "body":
+                            self.send_response(200)
+                            self.send_header("Content-Type", "text/event-stream")
+                            self.end_headers()
+                            for _ in range(12):
+                                if stop_drip.is_set():
+                                    break
+                                self.wfile.write(b'data: {"choices":[{"delta":{"content":"x"}}]}\n\n')
+                                self.wfile.flush()
+                                stop_drip.wait(0.2)
+                        elif slow_mode == "headers":
+                            self.wfile.write(b"HTTP/1.1 200 OK\r\n")
                             self.wfile.flush()
-                        except OSError:
-                            break
-                        stop_trickle.wait(0.2)
+                            for idx in range(12):
+                                if stop_drip.is_set():
+                                    break
+                                self.wfile.write(f"X-Drip-{idx}: slow\r\n".encode("ascii"))
+                                self.wfile.flush()
+                                stop_drip.wait(0.2)
+                            self.wfile.write(b"Content-Length: 2\r\n\r\n{}")
+                            self.wfile.flush()
+                        elif slow_mode == "chunk_framing":
+                            self.wfile.write(
+                                b"HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\n\r\n"
+                            )
+                            self.wfile.flush()
+                            for _ in range(12):
+                                if stop_drip.is_set():
+                                    break
+                                # Drip hex digits of chunk size without CRLF so readline blocks
+                                self.wfile.write(b"0")
+                                self.wfile.flush()
+                                stop_drip.wait(0.2)
+                        elif slow_mode == "http_error_body":
+                            self.send_response(503)
+                            self.send_header("Content-Type", "text/plain")
+                            self.end_headers()
+                            for _ in range(12):
+                                if stop_drip.is_set():
+                                    break
+                                self.wfile.write(b"upstream overload ")
+                                self.wfile.flush()
+                                stop_drip.wait(0.2)
+                    except OSError:
+                        pass
                     return
 
                 payload = json.dumps(
@@ -319,28 +369,50 @@ class TotalDeadlineStreamingTests(unittest.TestCase):
                 self.end_headers()
                 self.wfile.write(payload)
 
-        server = http.server.ThreadingHTTPServer(("127.0.0.1", 0), _TrickleHandler)
+        server = http.server.ThreadingHTTPServer(("127.0.0.1", 0), _DripHandler)
         thread = threading.Thread(target=server.serve_forever, daemon=True)
         thread.start()
         try:
             url = f"http://127.0.0.1:{server.server_port}/v1/chat/completions"
             start = time.monotonic()
             with patch.object(solver, "LLM_URL", url), \
-                 patch.object(solver, "LLM_MODELS", ["trickle-model", "fast-model"]), \
+                 patch.object(solver, "LLM_MODELS", ["slow-model", "fast-model"]), \
                  patch.object(solver, "LLM_TIMEOUT", 1), \
                  patch.object(solver, "LLM_KEY", ""), \
                  patch("builtins.print"):
                 answer = solver.ask("ping")
             elapsed = time.monotonic() - start
         finally:
-            stop_trickle.set()
+            stop_drip.set()
             server.shutdown()
             server.server_close()
             thread.join(timeout=2)
 
+        return answer, seen_models, elapsed
+
+    def test_periodic_streaming_body_exceeding_total_deadline_fails_over(self):
+        answer, seen_models, elapsed = self._run_loopback_scenario("body")
         self.assertEqual(answer, "fast-fallback-ok")
-        self.assertEqual(seen_models, ["trickle-model", "fast-model"])
-        self.assertLess(elapsed, 1.8)
+        self.assertEqual(seen_models, ["slow-model", "fast-model"])
+        self.assertLess(elapsed, 1.35)
+
+    def test_slow_drip_response_headers_enforces_wall_clock_deadline(self):
+        answer, seen_models, elapsed = self._run_loopback_scenario("headers")
+        self.assertEqual(answer, "fast-fallback-ok")
+        self.assertEqual(seen_models, ["slow-model", "fast-model"])
+        self.assertLess(elapsed, 1.35)
+
+    def test_slow_drip_chunk_framing_enforces_wall_clock_deadline(self):
+        answer, seen_models, elapsed = self._run_loopback_scenario("chunk_framing")
+        self.assertEqual(answer, "fast-fallback-ok")
+        self.assertEqual(seen_models, ["slow-model", "fast-model"])
+        self.assertLess(elapsed, 1.35)
+
+    def test_slow_drip_http_error_body_enforces_wall_clock_deadline(self):
+        answer, seen_models, elapsed = self._run_loopback_scenario("http_error_body")
+        self.assertEqual(answer, "fast-fallback-ok")
+        self.assertEqual(seen_models, ["slow-model", "fast-model"])
+        self.assertLess(elapsed, 1.35)
 
 
 if __name__ == "__main__":
