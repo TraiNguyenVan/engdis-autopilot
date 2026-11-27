@@ -1126,7 +1126,7 @@ class UnansweredAndPreSubmitGateTests(unittest.TestCase):
              patch.object(auto.solver, "do_task", return_value="mcq: D"), \
              patch.object(auto, "q", side_effect=lambda _t, expr: 0 if "mcqUnanswered" in expr else 1), \
              patch.object(auto, "st", return_value={"total": "30", "counter": "30"}), \
-             patch.object(auto, "click") as click_mock, \
+             patch.object(auto, "click", return_value=1) as click_mock, \
              patch.object(auto.poll, "wait_until", side_effect=[1, "You have completed the Final Test.\nYour score is 100%."]), \
              patch.object(auto.time, "sleep"):
             res = auto.handle_test(tab, "Question 30")

@@ -976,14 +976,42 @@ def handle_test(t, src, unit_handler=None, lesson_name=""):
                 return "test-unanswered: completeness-unknown"
         before_sig = t.js(NAV_STATE_SIG_JS) if test_area else None
         require_action_mode(t, expected_assessment)
-        click(t, "#learning__tasksNav_submitTest, a.learning__submitTestLink, .learning__submitTestLink, .learning__tasksNav_testBtnW")
-        t.js("(() => {const a=document.querySelector('#learning__tasksNav_submitTest, .learning__submitTestLink'); if(a && window.angular) angular.element(a).triggerHandler('click');})()")
-        t.js("""(() => {
-          const app = window.ng?.probe?.(document.querySelector('app'))?.componentInstance;
-          if (typeof app?.navigationService?.submitTest === 'function') {
-            try { app.navigationService.submitTest(); } catch(e) {}
-          }
-        })()""")
+        selector = "#learning__tasksNav_submitTest, a.learning__submitTestLink, .learning__submitTestLink, .learning__tasksNav_testBtnW"
+        if test_area:
+            # Never retry after an attempted click: it may already have submitted,
+            # even if the browser reports an error or the transition is delayed.
+            try:
+                clicked = click(t, selector)
+            except Exception:
+                return "test-submit-unverified"
+            if clicked == 0:
+                require_action_mode(t, expected_assessment)
+                if assessment_submit_state(t) != "ready":
+                    return "test-submit-unverified"
+                try:
+                    fallback = t.js("""(() => {
+                      if (document.querySelector('#learning__tasksNav_submitTest, a.learning__submitTestLink, .learning__submitTestLink, .learning__tasksNav_testBtnW')) return 0;
+                      const app = window.ng?.probe?.(document.querySelector('app'))?.componentInstance;
+                      if (typeof app?.navigationService?.submitTest !== 'function') return 0;
+                      app.navigationService.submitTest();
+                      return 1;
+                    })()""")
+                except Exception:
+                    return "test-submit-unverified"
+                if fallback != 1:
+                    return "test-submit-unverified"
+            elif clicked != 1:
+                return "test-submit-unverified"
+        else:
+            # Preserve existing course-lesson test submission behavior.
+            click(t, selector)
+            t.js("(() => {const a=document.querySelector('#learning__tasksNav_submitTest, .learning__submitTestLink'); if(a && window.angular) angular.element(a).triggerHandler('click');})()")
+            t.js("""(() => {
+              const app = window.ng?.probe?.(document.querySelector('app'))?.componentInstance;
+              if (typeof app?.navigationService?.submitTest === 'function') {
+                try { app.navigationService.submitTest(); } catch(e) {}
+              }
+            })()""")
         poll.wait_until(
             lambda: q(t, "return (document.querySelector('iframe#colorBoxIframe') || document.querySelector('#colorbox') || document.querySelector('.modal'))?1:0;"),
             lambda v: v == 1, timeout=8.0, interval=0.2)
