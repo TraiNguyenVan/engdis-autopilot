@@ -11,43 +11,39 @@ import solver
 
 
 class _FakeFITBTab:
-    """Offline stateful simulation of multi-dropdown `.DDLOptions__selected` pages.
-
-    Models:
-    - Multiple `.DDLOptions__selected` widgets with configurable wrapper classes
-      (`.DDLOptionsW`, `.prFITB__DDLOptionsW`, `.prFITB__qaItem`, `.prDDL__qaItem`, `.fitb-ddl`)
-      or document-level portal menus (`scope="document"`).
-    - Requiring `scrollIntoView({block: 'center'})` before clicking off-viewport
-      dropdown triggers (`require_scroll=True`).
-    - Stale open dropdown menus from earlier blanks staying in the DOM
-      (`keep_first_menu_open=True` or `initial_stale_portal`).
-    - Flaky option clicks that fail to update `.DDLOptions__selected` on attempt 0
-      (`fail_pick_attempts`), UI-semantic placeholder flags (`selected_placeholder`,
-      `placeholder` option dicts), and options disappearing between lookup and click
-      (`mutate_before_pick`).
-    """
+    """Offline stateful simulation of multi-dropdown `.DDLOptions__selected` pages."""
 
     def __init__(
         self,
         questions,
         dropdowns,
         *,
+        dom_text="",
         require_scroll=False,
         keep_first_menu_open=False,
         initial_stale_portal=None,
+        stale_portal_unclosable=False,
+        stale_portal_owner=None,
         fail_pick_attempts=None,
         mutate_before_pick=None,
+        on_attempt_open=None,
     ):
         self.questions = questions
         self.dropdowns = dropdowns
+        self.dom_text = dom_text
         self.require_scroll = require_scroll
         self.keep_first_menu_open = keep_first_menu_open
         self.stale_portal = list(initial_stale_portal) if initial_stale_portal else None
+        self.stale_portal_unclosable = stale_portal_unclosable
+        self.stale_portal_owner = stale_portal_owner
+        self.stale_portal_was_pre_visible = False
         self.fail_pick_attempts = dict(fail_pick_attempts or {})
         self.mutate_before_pick = mutate_before_pick
+        self.on_attempt_open = on_attempt_open
         self.scroll_calls = []
         self.open_clicks = []
         self.pick_clicks = []
+        self.stale_portal_clicks = []
         self.mouse_dispatches = []
         self.scripts = []
 
@@ -80,12 +76,19 @@ class _FakeFITBTab:
                 raw = dd.get("dom_options", dd.get("options", []))
                 return "ok", "container", self._filter_selectable(raw)
             return "ok", "none", []
-        if mode == "document":
+        if mode in ("document", "portal-linked"):
             if self.stale_portal is not None:
-                return "ok", "document", self._filter_selectable(self.stale_portal)
+                # Mirror `_FITB_DOM_JS`: portals explicitly owned by another trigger or
+                # already visible before `s.click()` are excluded unless bypassed.
+                if self.stale_portal_owner is not None and self.stale_portal_owner != idx:
+                    pass
+                elif self.stale_portal_was_pre_visible and not dd.get("bypass_js_before_vis"):
+                    pass
+                else:
+                    return "ok", "document", self._filter_selectable(self.stale_portal)
             if dd.get("open"):
                 raw = dd.get("dom_options", dd.get("options", []))
-                return "ok", "document", self._filter_selectable(raw)
+                return "ok", mode, self._filter_selectable(raw)
             return "ok", "none", []
         return "ok", "none", []
 
@@ -101,7 +104,7 @@ class _FakeFITBTab:
         self.scripts.append(script)
 
         # `do_task` readiness & classification support for `auto.handle_test` integration tests
-        if "document.querySelector('.DDLOptions__selected')" in script:
+        if "document.querySelector('.DDLOptions__selected')" in script and "practiceData" not in script and "CONTAINER_SEL" not in script:
             if "return 'fitb';" in script:
                 return "fitb"
             return 1
@@ -114,21 +117,46 @@ class _FakeFITBTab:
         if ".prMCQ__qaSet" in script:
             return 0
 
-        # 1. practiceData extraction
+        # 1. Extraction (`practiceData` + `domCount` + `domLists`)
         if "practiceData" in script and "answerLists" in script:
-            if not self.questions:
-                return None
-            text = (
-                self.questions[0].get("text", "")
-                if len(self.questions) == 1
-                else "\n".join(q.get("text", "") for q in self.questions if q.get("text"))
-            )
             lists = [
                 [a["txt"] for a in al.get("answers", [])]
-                for q in self.questions
+                for q in (self.questions or [])
                 for al in q.get("answerLists", [])
             ]
-            return {"text": text, "lists": lists}
+            dom_count = len(self.dropdowns)
+            if not lists and not dom_count:
+                return None
+            text = ""
+            if self.questions:
+                text = (
+                    self.questions[0].get("text", "")
+                    if len(self.questions) == 1
+                    else "\n".join(q.get("text", "") for q in self.questions if q.get("text"))
+                )
+            dom_lists = [
+                self._filter_selectable(dd.get("pre_dom_options", []))
+                for dd in self.dropdowns
+            ]
+            return {
+                "text": text or self.dom_text,
+                "domText": self.dom_text or text,
+                "lists": lists,
+                "domCount": dom_count,
+                "domLists": dom_lists,
+            }
+
+        # Final rendered-blank count / reconciliation audit
+        if "return getTriggers().length;" in script:
+            return len(self.dropdowns)
+        if "return getTriggers().map(" in script:
+            return [
+                {
+                    "selected": dd.get("selected", ""),
+                    "selectedPlaceholder": self._is_sel_placeholder(dd),
+                }
+                for dd in self.dropdowns
+            ]
 
         # Extract target blank index from getTrigger(i)
         m_idx = re.search(r"getTrigger\((\d+)\)", script)
@@ -141,8 +169,10 @@ class _FakeFITBTab:
         if "closeOtherMenus(s," in script:
             if not dd:
                 return {"status": "nf"}
+            if callable(self.on_attempt_open):
+                self.on_attempt_open(idx, dd, len([x for x in self.open_clicks if x == idx]))
             force_close = "closeOtherMenus(s, true)" in script
-            if force_close:
+            if force_close and not self.stale_portal_unclosable:
                 self.stale_portal = None
                 for j, other in enumerate(self.dropdowns):
                     if j != idx:
@@ -152,6 +182,9 @@ class _FakeFITBTab:
                     if j != idx and not (j == 0 and self.keep_first_menu_open):
                         other["open"] = False
 
+            # Track whether `stale_portal` was ALREADY visible right before `s.click()`!
+            self.stale_portal_was_pre_visible = self.stale_portal is not None
+
             if "scrollIntoView" in script and "block: 'center'" in script:
                 dd["scrolled"] = True
                 self.scroll_calls.append(idx)
@@ -160,7 +193,7 @@ class _FakeFITBTab:
                 self.mouse_dispatches.append(("trigger", idx))
 
             self.open_clicks.append(idx)
-            if not self.require_scroll or dd.get("scrolled"):
+            if not dd.get("broken_open") and (not self.require_scroll or dd.get("scrolled")):
                 dd["open"] = True
             return {
                 "status": "ok",
@@ -181,19 +214,18 @@ class _FakeFITBTab:
                 "options": opts,
             }
 
-        # 4. Option pick step (mirrors exact fail-closed JS logic)
+        # 4. Option pick step (mirrors exact fail-closed & cross-trigger JS logic)
         if "const wantText =" in script:
             if not dd:
                 return {"clicked": 0, "selected": "", "selectedPlaceholder": True}
             if callable(self.mutate_before_pick):
                 self.mutate_before_pick(idx, dd)
-            _status, _scope, opts = self._visible_options(idx)
+            _status, scope, opts = self._visible_options(idx)
             m_pick = re.search(r"res\.items\[(\d+)\]", script)
             m_want = re.search(r"const wantText = (\".*?\");", script)
             pick_idx = int(m_pick.group(1)) if m_pick else -1
             want_text = json.loads(m_want.group(1)) if m_want else ""
 
-            # Fail closed: never fall back to a stale index if `want_text` disappeared!
             has_fail_closed = "|| null);" in script and "|| pick;" not in script
             if 0 <= pick_idx < len(opts) and opts[pick_idx] == want_text:
                 chosen = opts[pick_idx]
@@ -209,6 +241,27 @@ class _FakeFITBTab:
                     "clicked": 0,
                     "selected": dd.get("selected", ""),
                     "selectedPlaceholder": self._is_sel_placeholder(dd),
+                }
+
+            # If click landed on a stale portal belonging to another blank, mutate that owner blank!
+            if scope == "document" and self.stale_portal is not None and self.stale_portal_owner is not None and self.stale_portal_owner != idx:
+                self.stale_portal_clicks.append((idx, self.stale_portal_owner, chosen))
+                owner_dd = self._get_dd(self.stale_portal_owner)
+                if owner_dd is not None:
+                    prev_val = owner_dd.get("selected", "")
+                    owner_dd["selected"] = chosen
+                    if "otherMutated" in script and prev_val != chosen:
+                        return {
+                            "clicked": 0,
+                            "otherMutated": 1,
+                            "selected": dd.get("selected", ""),
+                            "selectedPlaceholder": self._is_sel_placeholder(dd),
+                        }
+                return {
+                    "clicked": 1,
+                    "selected": dd.get("selected", ""),
+                    "selectedPlaceholder": self._is_sel_placeholder(dd),
+                    "rect": None,
                 }
 
             if not re.search(r"if\s*\(\s*0\s*>\s*0\s*\)\s*fireMouse\(pick\)", script):
@@ -312,6 +365,7 @@ class El {
     this.classList = new ClassList(this);
     this.innerText = text;
     this.textContent = text;
+    this.id = attrs.id ? String(attrs.id) : '';
     this.style = {};
     this.hidden = false;
     this.disabled = !!attrs.disabled;
@@ -379,7 +433,7 @@ class FitbOptionMatcherTests(unittest.TestCase):
         phrase_opts = ["despite", "in spite of", "although"]
         self.assertEqual(solver._match_ddl_option("  IN   Spite\u00a0Of! ", phrase_opts), 1)
 
-    def test_partial_substring_prefers_word_boundary_and_longest_option(self):
+    def test_partial_substring_prefers_word_boundary_and_rejects_inflection_drift(self):
         articles = ["a", "an", "the"]
         self.assertEqual(solver._match_ddl_option("an engineer", articles), 1)
         self.assertEqual(solver._match_ddl_option("a doctor", articles), 0)
@@ -388,8 +442,10 @@ class FitbOptionMatcherTests(unittest.TestCase):
         self.assertEqual(solver._match_ddl_option("in spite of the rain", phrases), 2)
         self.assertEqual(solver._match_ddl_option("spite of", ["despite", "in spite of", "although"]), 1)
 
+        # Intra-word substring must NOT drift `choose` -> `chooses` when `choose` is absent!
+        self.assertIsNone(solver._match_ddl_option("choose", ["chooses", "chose"]))
+
     def test_legitimate_choose_and_select_options_are_not_filtered_as_placeholders(self):
-        """Regression for review finding #2: `choose` must match `choose`, not `chooses`."""
         verb_opts = ["choose", "chooses", "chose"]
         self.assertEqual(solver._match_ddl_option("choose", verb_opts), 0)
         self.assertEqual(solver._match_ddl_option("Choose.", verb_opts), 0)
@@ -398,7 +454,6 @@ class FitbOptionMatcherTests(unittest.TestCase):
         self.assertTrue(solver._ddl_selected_ok("choose", "choose", is_placeholder=False))
         self.assertFalse(solver._ddl_selected_ok("choose", "choose", is_placeholder=True))
 
-        # UI-semantic placeholder dict entries are skipped while real `"choose"` is matched
         ui_opts = [
             {"text": "choose", "placeholder": True},
             {"text": "choose", "placeholder": False},
@@ -407,7 +462,6 @@ class FitbOptionMatcherTests(unittest.TestCase):
         self.assertEqual(solver._match_ddl_option("choose", ui_opts), 1)
 
     def test_selected_verification_rejects_substring_false_positives(self):
-        """Regression for review finding #1: existing `in` must NOT validate `in spite of`."""
         self.assertFalse(solver._ddl_selected_ok("in", "in spite of"))
         self.assertFalse(solver._ddl_selected_ok("in spite of", "in"))
         self.assertFalse(solver._ddl_selected_ok("choose", "chooses"))
@@ -448,10 +502,143 @@ class FitbMultiDropdownSolverTests(unittest.TestCase):
             ["large", "which", "had left", "however"],
         )
 
+    def test_choose_disappearing_before_retry_fails_closed_without_selecting_chooses(self):
+        """Re-review finding #1: if `choose` disappears before retry, never select `chooses`."""
+        option_lists = [["choose", "chooses", "chose"]]
+
+        def _drop_choose_on_retry(_idx, dd, attempt_num):
+            if attempt_num >= 1:
+                dd["dom_options"] = ["chooses", "chose"]
+
+        tab = _FakeFITBTab(
+            questions=[_make_practice_question("They __ wisely.", option_lists)],
+            dropdowns=[{
+                "options": ["choose", "chooses", "chose"],
+                "dom_options": ["choose", "chooses", "chose"],
+                "selected": "",
+            }],
+            fail_pick_attempts={0: 1},
+            on_attempt_open=_drop_choose_on_retry,
+        )
+        with patch.object(solver, "ask_json", return_value={"1": "choose"}), \
+             patch.object(solver.time, "sleep"):
+            res = solver.solve_fitb(tab, "")
+
+        self.assertEqual(res, "other: fitb: 0=noopt")
+        self.assertNotIn((0, "chooses"), tab.pick_clicks)
+        self.assertEqual(tab.dropdowns[0]["selected"], "")
+
+        # Multi-word prefix variant: if `in spite of` disappears before retry leaving `in`, fail closed!
+        phrase_lists = [["in", "in spite of", "despite"]]
+
+        def _drop_phrase_on_retry(_idx, dd, attempt_num):
+            if attempt_num >= 1:
+                dd["dom_options"] = ["in", "despite"]
+
+        tab_phrase = _FakeFITBTab(
+            questions=[_make_practice_question("We went out __ the storm.", phrase_lists)],
+            dropdowns=[{
+                "options": ["in", "in spite of", "despite"],
+                "dom_options": ["in", "in spite of", "despite"],
+                "selected": "",
+            }],
+            fail_pick_attempts={0: 1},
+            on_attempt_open=_drop_phrase_on_retry,
+        )
+        with patch.object(solver, "ask_json", return_value={"1": "in spite of"}), \
+             patch.object(solver.time, "sleep"):
+            res_phrase = solver.solve_fitb(tab_phrase, "")
+
+        self.assertEqual(res_phrase, "other: fitb: 0=noopt")
+        self.assertNotIn((0, "in"), tab_phrase.pick_clicks)
+        self.assertEqual(tab_phrase.dropdowns[0]["selected"], "")
+
+    def test_stale_portal_with_overlapping_option_and_preexisting_value_rejected(self):
+        """Re-review finding #2: stale portal sharing `however` + pre-existing `however` on blank 1 must fail closed."""
+        option_lists = [
+            ["large", "ceramic", "however"],
+            ["however", "therefore", "although"],
+        ]
+        # Blank 0 solved to "large"; Blank 0's portal ["large", "ceramic", "however"] stays stuck open,
+        # Blank 1 fails to open its own portal (`broken_open=True`) and ALREADY displays `"however"`!
+        tab = _FakeFITBTab(
+            questions=[_make_practice_question("1 __ 2 __", option_lists)],
+            dropdowns=[
+                {"options": option_lists[0], "selected": "", "mode": "portal-linked"},
+                {
+                    "options": option_lists[1],
+                    "selected": "however",
+                    "mode": "document",
+                    "broken_open": True,
+                    "bypass_js_before_vis": True,
+                },
+            ],
+            initial_stale_portal=None,
+            stale_portal_unclosable=True,
+            stale_portal_owner=0,
+        )
+        orig_js = tab.js
+
+        def _hook_js(script):
+            res = orig_js(script)
+            # After Blank 0 finishes, leave Blank 0's portal ["large", "ceramic", "however"] lingering
+            if tab.dropdowns[0]["selected"] == "large" and tab.stale_portal is None:
+                tab.stale_portal = ["large", "ceramic", "however"]
+                tab.stale_portal_owner = None  # Even without explicit owner, option-set mismatch + preVis catches it!
+            return res
+
+        tab.js = _hook_js
+        with patch.object(solver, "ask_json", return_value={"1": "large", "2": "however"}), \
+             patch.object(solver.time, "sleep"):
+            res = solver.solve_fitb(tab, "")
+
+        self.assertEqual(res, "other: fitb: 0=ok 1=noopt")
+        self.assertEqual(tab.dropdowns[0]["selected"], "large")
+        self.assertEqual(tab.stale_portal_clicks, [])
+        self.assertNotIn((1, "however"), tab.pick_clicks)
+
+    def test_extra_rendered_blanks_beyond_practice_data_reconciled_and_block_submit(self):
+        """Re-review finding #3: extra UI blanks omitted from practiceData block final submission if unverified."""
+        # Subcase A: practiceData lists ONLY 1 blank, visible UI renders 2 blanks (second blank left empty)
+        tab_incomplete = _FakeFITBTab(
+            questions=[_make_practice_question("A __ bowl", [["large", "ceramic", "three"]])],
+            dropdowns=[
+                {"options": ["large", "ceramic", "three"], "selected": ""},
+                {"options": [], "selected": ""},
+            ],
+        )
+        with patch.object(solver, "ask_json", return_value={"1": "ceramic"}), \
+             patch.object(solver.time, "sleep"), \
+             patch.object(auto.time, "sleep"), \
+             patch.object(auto, "st", return_value={"total": "2", "counter": "2"}), \
+             patch.object(auto, "click") as mock_click, \
+             patch.object(auto.poll, "wait_until"), \
+             patch("builtins.print"):
+            res = auto.handle_test(tab_incomplete, "")
+
+        self.assertTrue(res.startswith("test-unanswered:"), res)
+        self.assertIn("0=ok", res)
+        self.assertRegex(res, r"1=(\?|noopt|empty)")
+        mock_click.assert_not_called()
+
+        # Subcase B: extra rendered blank WITH discoverable DOM options is solved and verified when LLM answers both!
+        tab_both = _FakeFITBTab(
+            questions=[_make_practice_question("A __ bowl", [["large", "ceramic"]])],
+            dom_text="A [[1]] bowl on a [[2]] table",
+            dropdowns=[
+                {"options": ["large", "ceramic"], "selected": ""},
+                {"options": ["wooden", "glass"], "pre_dom_options": ["wooden", "glass"], "selected": ""},
+            ],
+        )
+        with patch.object(solver, "ask_json", return_value={"1": "ceramic", "2": "wooden"}), \
+             patch.object(solver.time, "sleep"):
+            res_both = solver.solve_fitb(tab_both, "")
+
+        self.assertEqual(res_both, "fitb: 0=ok 1=ok")
+        self.assertEqual([d["selected"] for d in tab_both.dropdowns], ["ceramic", "wooden"])
+
     def test_existing_in_does_not_pass_as_in_spite_of_after_failed_click(self):
-        """Regression for review finding #1: pre-existing `in` must retry/fail when `in spite of` click fails."""
         option_lists = [["in", "in spite of", "despite"]]
-        # Subcase A: attempt 0 fails (leaves `in`), attempt 1 succeeds (`in spite of`)
         tab_retry = _FakeFITBTab(
             questions=[_make_practice_question("We went out __ the rain.", option_lists)],
             dropdowns=[{"options": option_lists[0], "selected": "in"}],
@@ -464,7 +651,6 @@ class FitbMultiDropdownSolverTests(unittest.TestCase):
         self.assertEqual(tab_retry.dropdowns[0]["selected"], "in spite of")
         self.assertEqual(len(tab_retry.pick_clicks), 2)
 
-        # Subcase B: all click attempts fail (leaves `in`) -> must NOT report `ok`
         tab_fail = _FakeFITBTab(
             questions=[_make_practice_question("We went out __ the rain.", option_lists)],
             dropdowns=[{"options": option_lists[0], "selected": "in"}],
@@ -477,7 +663,6 @@ class FitbMultiDropdownSolverTests(unittest.TestCase):
         self.assertEqual(tab_fail.dropdowns[0]["selected"], "in")
 
     def test_solve_fitb_selects_choose_over_chooses_and_checks_placeholder_ui(self):
-        """Regression for review finding #2: `choose` option + UI placeholder state."""
         option_lists = [["choose", "chooses", "chose"]]
         tab = _FakeFITBTab(
             questions=[_make_practice_question("They always __ wisely.", option_lists)],
@@ -501,11 +686,9 @@ class FitbMultiDropdownSolverTests(unittest.TestCase):
         self.assertEqual(res, "fitb: 0=ok")
         self.assertEqual(tab.dropdowns[0]["selected"], "choose")
         self.assertFalse(tab.dropdowns[0]["selected_placeholder"])
-        # Retried because attempt 0 left `selected_placeholder=True` even though text was `"choose"`!
         self.assertEqual(tab.pick_clicks, [(0, "choose"), (0, "choose")])
 
     def test_disappearing_option_between_lookup_and_click_fails_closed(self):
-        """Regression for review finding #4: never click stale index if option text vanished."""
         option_lists = [["alpha", "beta"]]
 
         def _drop_alpha_before_pick(_idx, dd):
@@ -516,8 +699,6 @@ class FitbMultiDropdownSolverTests(unittest.TestCase):
             dropdowns=[{"options": ["alpha", "beta"], "dom_options": ["alpha", "beta"], "selected": ""}],
             mutate_before_pick=_drop_alpha_before_pick,
         )
-        # Restore ["alpha", "beta"] before each lookup so lookup sees "alpha" at idx 0,
-        # then `mutate_before_pick` removes "alpha" right before the click step runs.
         orig_js = tab.js
 
         def _hook_js(script):
@@ -535,10 +716,8 @@ class FitbMultiDropdownSolverTests(unittest.TestCase):
         self.assertEqual(tab.dropdowns[0]["selected"], "")
 
     def test_handle_test_unanswered_guard_blocks_submit_on_empty_and_noopt(self):
-        """Regression for review finding #3: unresolved `empty` / `noopt` dropdowns must NOT submit."""
         option_lists = [["large", "ceramic", "three"]]
 
-        # 1. `empty` failure on final test question (2 of 2)
         tab_empty = _FakeFITBTab(
             questions=[_make_practice_question("A __ bowl", option_lists)],
             dropdowns=[{"options": option_lists[0], "selected": ""}],
@@ -557,7 +736,6 @@ class FitbMultiDropdownSolverTests(unittest.TestCase):
         self.assertIn("0=empty", res_empty)
         mock_click.assert_not_called()
 
-        # 2. `noopt` failure on final test question (2 of 2)
         tab_noopt = _FakeFITBTab(
             questions=[_make_practice_question("A __ bowl", option_lists)],
             dropdowns=[{"options": [], "selected": ""}],
@@ -674,9 +852,9 @@ class FitbMultiDropdownSolverTests(unittest.TestCase):
 
 
 class FitbDomJsExecutionTests(unittest.TestCase):
-    """Validates `_FITB_DOM_JS` scoping, UI-placeholder semantics, and fail-closed click in JS."""
+    """Validates `_FITB_DOM_JS` scoping, portal trigger association, UI placeholders, and fail-closed click in JS."""
 
-    def test_dom_js_declares_required_containers_options_and_fail_closed_pick(self):
+    def test_dom_js_declares_required_containers_options_and_portal_owner(self):
         for token in (
             ".DDLOptionsW",
             ".prFITB__qaItem",
@@ -687,10 +865,11 @@ class FitbDomJsExecutionTests(unittest.TestCase):
             ".DDLOptions__option",
             "isOptionPlaceholder",
             "isSelectedPlaceholder",
+            "getPortalOwner",
         ):
             self.assertIn(token, solver._FITB_DOM_JS)
 
-    def test_dom_js_scopes_wrappers_and_ui_placeholders_in_node(self):
+    def test_dom_js_scopes_wrappers_and_associated_portals_in_node(self):
         node_bin = shutil.which("node")
         if not node_bin:
             return
@@ -701,7 +880,7 @@ const practice = new El('div', 'learning__angPracticeW');
 body.append(practice);
 
 // Blank 0 (.DDLOptionsW): includes UI-placeholder item "choose" + legitimate options ["choose", "chooses", "chose"]
-const sel0 = new El('div', 'DDLOptions__selected DDLOptions__selected--placeholder', 'choose');
+const sel0 = new El('div', 'DDLOptions__selected DDLOptions__selected--placeholder', 'choose', {id: 'trig-0', 'aria-controls': 'portal-0'});
 const phOpt = new El('li', 'DDLOptions__listItem DDLOptions__listItem--placeholder', 'choose', {'aria-disabled': 'true'});
 const realChoose = new El('li', 'DDLOptions__listItem', 'choose');
 const realChooses = new El('li', 'DDLOptions__listItem', 'chooses');
@@ -724,14 +903,22 @@ const b2 = new El('div', 'prDDL__qaItem').append(
   new El('div', 'DDLOptions__option', 'had left'),
   new El('div', 'DDLOptions__option', 'leaves')
 );
-// Blank 3 (.fitb-ddl with NO container options -> uses visible body portal)
-const b3 = new El('div', 'fitb-ddl').append(new El('div', 'DDLOptions__selected', ''));
-const hiddenPortal = new El('div', 'DDLOptions__option', 'stale-hidden');
-hiddenPortal.style.display = 'none';
-const phPortal = new El('div', 'DDLOptions__option disabled', 'Choose...', {disabled: 'true'});
-const visPortal = new El('div', 'DDLOptions__option', 'however');
+// Blank 3 (.fitb-ddl linked via aria-controls="portal-3" to its body-level portal)
+const b3 = new El('div', 'fitb-ddl').append(
+  new El('div', 'DDLOptions__selected', '', {id: 'trig-3', 'aria-controls': 'portal-3'})
+);
+// Stale portal explicitly owned by Blank 0 AND an unlinked stale option already sitting on body:
+const stalePortal0 = new El('div', 'cdk-overlay-pane', '', {id: 'portal-0'}).append(
+  new El('div', 'DDLOptions__option', 'however')
+);
+const unlinkedStale = new El('div', 'DDLOptions__option', 'unlinked-stale');
+// Portal explicitly linked to Blank 3:
+const portal3 = new El('div', 'cdk-overlay-pane', '', {id: 'portal-3'}).append(
+  new El('div', 'DDLOptions__option disabled', 'Choose...', {disabled: 'true'}),
+  new El('div', 'DDLOptions__option', 'however')
+);
 practice.append(b0, b1, b2, b3);
-body.append(hiddenPortal, phPortal, visPortal);
+body.append(stalePortal0, unlinkedStale, portal3);
 
 const document = {
   body,
@@ -759,22 +946,84 @@ console.log(JSON.stringify(out));
             {"scope": "container", "selPh": True, "opts": ["choose", "chooses", "chose"], "firstIsRealChoose": True},
             {"scope": "container", "selPh": False, "opts": ["which", "whose"], "firstIsRealChoose": None},
             {"scope": "container", "selPh": True, "opts": ["had left", "leaves"], "firstIsRealChoose": None},
-            {"scope": "document", "selPh": True, "opts": ["however"], "firstIsRealChoose": None},
+            {"scope": "portal-linked", "selPh": True, "opts": ["however"], "firstIsRealChoose": None},
         ])
 
-    def test_pick_js_fails_closed_in_node_when_target_option_disappears(self):
-        """Executes the real `pick_res` JS from `solve_fitb` in Node when `alpha` vanished."""
+    def test_portal_open_provenance_rejects_preexisting_stale_menu_in_node(self):
+        """Re-review finding #2 in V8: unlinked menu already visible before `s.click()` is rejected."""
         node_bin = shutil.which("node")
         if not node_bin:
             return
-        # Capture the exact `pick_res` JS string emitted by `solve_fitb`!
+        harness = _NODE_DOM_SHIM + r"""
+const body = new El('body');
+const documentElement = new El('html').append(body);
+const practice = new El('div', 'learning__angPracticeW');
+body.append(practice);
+
+const s0 = new El('div', 'DDLOptions__selected', 'large');
+const s1 = new El('div', 'DDLOptions__selected', 'however');
+practice.append(new El('div', 'DDLOptionsW').append(s0), new El('div', 'DDLOptionsW').append(s1));
+
+// Stale unlinked menu from Blank 0 already visible on body before s1 is clicked:
+const staleOpt = new El('li', 'DDLOptions__listItem', 'however');
+const staleMenu = new El('ul', 'DDLOptions__list').append(staleOpt);
+body.append(staleMenu);
+
+const document = {
+  body,
+  documentElement,
+  querySelectorAll: (s) => documentElement.querySelectorAll(s),
+  querySelector: (s) => documentElement.querySelector(s),
+};
+const window = { getComputedStyle: (el) => el.style };
+""" + solver._FITB_DOM_JS + r"""
+// 1. Simulate open_res for s1 when s1 fails to open a new menu (staleMenu was already visible!):
+const preVis1 = selectableOptions(document.querySelectorAll(OPT_SEL)).filter(isVisible);
+window._edFitbPortalState = { trigger: s1, beforeVis: new WeakSet(preVis1) };
+s1.click();
+const afterBrokenOpen = getScopedOptions(s1);
+
+// 2. Now simulate s1.click() actually mounting a fresh portal menu for s1:
+const freshOpt = new El('li', 'DDLOptions__listItem', 'however');
+s1.onclick = () => { body.append(new El('ul', 'DDLOptions__list').append(freshOpt)); };
+const preVis2 = selectableOptions(document.querySelectorAll(OPT_SEL)).filter(isVisible);
+window._edFitbPortalState = { trigger: s1, beforeVis: new WeakSet(preVis2) };
+s1.click();
+const afterRealOpen = getScopedOptions(s1);
+
+console.log(JSON.stringify({
+  brokenScope: afterBrokenOpen.scope,
+  brokenCount: afterBrokenOpen.items.length,
+  realScope: afterRealOpen.scope,
+  realIsFresh: afterRealOpen.items.length === 1 && afterRealOpen.items[0] === freshOpt,
+}));
+"""
+        proc = subprocess.run([node_bin, "-e", harness], check=True, capture_output=True, text=True)
+        parsed = json.loads(proc.stdout.strip())
+        self.assertEqual(parsed, {
+            "brokenScope": "none",
+            "brokenCount": 0,
+            "realScope": "document",
+            "realIsFresh": True,
+        })
+
+    def test_pick_js_fails_closed_in_node_when_target_option_disappears(self):
+        node_bin = shutil.which("node")
+        if not node_bin:
+            return
         captured = []
 
         class _CaptureTab:
             def js(self, script):
                 captured.append(script)
-                if "practiceData" in script:
-                    return {"text": "Pick __", "lists": [["alpha", "beta"]]}
+                if "practiceData" in script and "answerLists" in script:
+                    return {
+                        "text": "Pick __",
+                        "domText": "Pick [[1]]",
+                        "lists": [["alpha", "beta"]],
+                        "domCount": 1,
+                        "domLists": [["alpha", "beta"]],
+                    }
                 if "closeOtherMenus(s," in script:
                     return {"status": "ok", "selected": "", "selectedPlaceholder": True}
                 if "options: res.items.map(getOptText)" in script:
@@ -787,6 +1036,8 @@ console.log(JSON.stringify(out));
                     }
                 if "const wantText =" in script:
                     return {"clicked": 0, "selected": "", "selectedPlaceholder": True}
+                if "return getTriggers().map(" in script:
+                    return [{"selected": "", "selectedPlaceholder": True}]
                 return None
 
         with patch.object(solver, "ask_json", return_value={"1": "alpha"}), \
@@ -803,7 +1054,6 @@ body.append(practice);
 let betaClicked = false;
 const beta = new El('li', 'DDLOptions__listItem', 'beta');
 beta.onclick = () => { betaClicked = true; };
-// Only "beta" remains at index 0 when pick IIFE runs (target "alpha" disappeared!)
 const b0 = new El('div', 'DDLOptionsW').append(
   new El('div', 'DDLOptions__selected', ''),
   new El('ul', 'DDLOptions__list').append(beta)
