@@ -523,7 +523,7 @@ ASSESSMENT_SUBMIT_STATE_JS = f"""(() => {{
 
 HAS_INCOMPLETE_ASSESSMENT_TASKS_JS = ASSESSMENT_SUBMIT_STATE_JS
 
-IS_FINAL_ASSESSMENT_COMPLETE_JS = """(() => {
+IS_FINAL_ASSESSMENT_COMPLETE_JS = f"""(() => {{
     if (document.querySelectorAll('ed-la-dropdownlist').length > 0) return false;
     const href = String(window.location?.href || '');
     const app = window.ng?.probe?.(document.querySelector('app'))?.componentInstance;
@@ -544,39 +544,78 @@ IS_FINAL_ASSESSMENT_COMPLETE_JS = """(() => {
     if (curTask || intro) return false;
 
     const isVisible = (el) => Boolean(el && (el.offsetWidth || el.offsetHeight || (el.getClientRects && el.getClientRects().length)));
-    if (isVisible(document.querySelector('#learning__tasksNav_submitTest, .learning__submitTestLink, .learning__tasksNav_testBtnW'))) {
+    if (isVisible(document.querySelector('#learning__tasksNav_submitTest, .learning__submitTestLink, .learning__tasksNav_testBtnW'))) {{
         return false;
-    }
+    }}
     const actionBtns = [...document.querySelectorAll('button, input[type=button], a.button, .btnStartTest')];
-    if (actionBtns.some(b => isVisible(b) && /start test|next section|continue to section/i.test(String(b.innerText || b.value || '').trim()))) {
+    if (actionBtns.some(b => isVisible(b) && /start test|next section|continue to section/i.test(String(b.innerText || b.value || '').trim()))) {{
         return false;
-    }
+    }}
 
     const text = String(document.body?.innerText || '');
-    if (/\\bsection\\s+\\d+\\b/i.test(text) && !/\\b(final test|midterm|placement|you have completed the)\\b/i.test(text)) {
+    if (!/your\\s+(?:test\\s+)?score\\s+is/i.test(text)) return false;
+    if (/\\bsection\\s+\\d+\\b/i.test(text) && !/\\b(final test|midterm|placement|you have completed the)\\b/i.test(text)) {{
         return false;
-    }
+    }}
 
     const nav = app?.navigationService;
+    if (!app || !nav) return false;
+
+    {_SECTION_KEY_HELPER_JS}
+    const isIntro = (n) => /testintronode|^intro$/i.test(String(n?.Name || '').trim());
     const isDone = (n) => Boolean(n?.IsDone) || Number(n?.Progress ?? 0) >= 0.999;
-    const uList = nav?._unitsList;
-    if (Array.isArray(uList?.Children) && uList.Children.length > 1) {
-        const uIdx = typeof uList.SelectedIndex === 'number' ? uList.SelectedIndex : -1;
-        if (uIdx >= 0 && uIdx + 1 < uList.Children.length) return false;
-        if (uList.Children.slice(0, -1).some(u => u && !isDone(u))) return false;
-    }
-    const lList = nav?._lessonsList;
-    if (Array.isArray(lList?.Children) && lList.Children.length > 1) {
-        let lIdx = typeof lList.SelectedIndex === 'number' ? lList.SelectedIndex : -1;
-        if (lIdx < 0 && lList.SelectedNode?.NodeId !== undefined) {
-            lIdx = lList.Children.findIndex(c => c && c.NodeId === lList.SelectedNode.NodeId);
-        }
-        if (lIdx >= 0 && lList.Children.slice(lIdx + 1).some(l => l && !isDone(l))) {
-            return false;
-        }
-    }
+    const hasExplicitFinalBanner = /\\byou\\s+have\\s+completed\\s+the\\b[\\s\\S]*\\b(test|assessment|exam)\\b/i.test(text)
+        || Boolean(app?.isTestCompleted || app?.testCompleted);
+
+    const nodeChildrenDone = (node) => {{
+        if (!Array.isArray(node?.Children) || !node.Children.length) return isDone(node);
+        const leaves = [];
+        for (const ch of node.Children) {{
+            if (!ch || isIntro(ch)) continue;
+            if (Array.isArray(ch.Children) && ch.Children.length) {{
+                for (const leaf of ch.Children) {{
+                    if (leaf && !isIntro(leaf)) leaves.push(leaf);
+                }}
+            }} else {{
+                leaves.push(ch);
+            }}
+        }}
+        return leaves.length ? leaves.every(isDone) : isDone(node);
+    }};
+
+    const verifyListComplete = (listObj) => {{
+        if (!Array.isArray(listObj?.Children) || listObj.Children.length === 0) return false;
+        const items = listObj.Children;
+        const nonIntroIndices = [];
+        for (let i = 0; i < items.length; i++) {{
+            if (!items[i]) return false;
+            if (!isIntro(items[i])) nonIntroIndices.push(i);
+        }}
+        if (!nonIntroIndices.length) return false;
+        if (nonIntroIndices.every(i => nodeChildrenDone(items[i]))) return true;
+        const curIdx = resolveIdx(listObj);
+        const lastIdx = nonIntroIndices[nonIntroIndices.length - 1];
+        if (curIdx !== lastIdx || !hasExplicitFinalBanner) return false;
+        return nonIntroIndices.slice(0, -1).every(i => nodeChildrenDone(items[i]));
+    }};
+
+    const uList = nav._unitsList;
+    const lList = nav._lessonsList;
+    if (uList !== undefined && uList !== null && !verifyListComplete(uList)) return false;
+    if (lList !== undefined && lList !== null && !verifyListComplete(lList)) return false;
+
+    const hasVerifiedList = (uList !== undefined && uList !== null) || (lList !== undefined && lList !== null);
+    if (!hasVerifiedList) return false;
+
+    const tList = nav._tasksList;
+    if (Array.isArray(tList?.Children) && tList.Children.length > 0) {{
+        const nonIntroTasks = tList.Children.filter(tk => tk && !isIntro(tk));
+        if (nonIntroTasks.slice(0, -1).some(tk => !isDone(tk))) return false;
+        if (!hasExplicitFinalBanner && nonIntroTasks.some(tk => !isDone(tk))) return false;
+    }}
+
     return true;
-})()"""
+}})()"""
 
 _SOLVER_FAILURE_TOKENS = (
     ": nodata",
@@ -915,8 +954,12 @@ def handle_test(t, src, unit_handler=None, lesson_name=""):
                 final_score = extract_score_lines(post_body) or score
                 return f"test-submit-final {final_score}"
             after_sig = t.js(NAV_STATE_SIG_JS)
+            has_live_nav = bool(t.js("""(() => {
+              const nav = window.ng?.probe?.(document.querySelector('app'))?.componentInstance?.navigationService;
+              return Boolean(nav && ((Array.isArray(nav._lessonsList?.Children) && nav._lessonsList.Children.length) || (Array.isArray(nav._stepsList?.Children) && nav._stepsList.Children.length)));
+            })()"""))
             has_reminder = bool(q(t, "return /unanswered|not answered|incomplete|please answer/i.test(document.body?.innerText || '') ? 1 : 0;"))
-            if after_sig and before_sig and after_sig != before_sig and not has_reminder:
+            if has_live_nav and after_sig and before_sig and after_sig != before_sig and not has_reminder and not has_score_text(post_body):
                 return "test-submit-section"
             return "test-submit-unverified"
         # Propagate step completion ONLY for standard course lessons with a confirmed score
@@ -1236,9 +1279,16 @@ def main(max_iter=120):
                     score = extract_score_lines(s.get("body"))
                     print(f"Assessment complete: {' | '.join(score) or 'completed'}", flush=True)
                     return
-                if not q(t, TEST_WIDGETS_JS) and advance(t):
-                    prev = None
-                    continue
+                if not q(t, TEST_WIDGETS_JS):
+                    has_live_nav = bool(t.js("""(() => {
+                      const nav = window.ng?.probe?.(document.querySelector('app'))?.componentInstance?.navigationService;
+                      return Boolean(nav && ((Array.isArray(nav._unitsList?.Children) && nav._unitsList.Children.length) || (Array.isArray(nav._lessonsList?.Children) && nav._lessonsList.Children.length)));
+                    })()"""))
+                    if has_live_nav and advance(t):
+                        prev = None
+                        continue
+                    print("[AGENT-ACTION-REQUIRED] Assessment score screen lacks verified final completion state; stopping", file=sys.stderr)
+                    sys.exit(6)
             else:
                 print(f"-- test/course completed, advancing to finish lesson ({s.get('lesson')})")
                 nxt = solver.set_next_step(t)

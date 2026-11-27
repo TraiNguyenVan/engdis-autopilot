@@ -978,6 +978,127 @@ class AssessmentScoreAndSectionTransitionTests(unittest.TestCase):
         )["res"]
         self.assertTrue(out_done)
 
+    def test_final_completion_predicate_fails_closed_when_nav_or_lists_missing_or_empty(self):
+        # 1. Exact review reproduction: TestArea.html + score body + NO app/navigation node -> False
+        for body in (
+            "Your score is 90%.",
+            "You have completed the Placement Final Test.\nYour score is 90%.",
+        ):
+            out_no_app = run_node_js(
+                auto.IS_FINAL_ASSESSMENT_COMPLETE_JS,
+                url="https://ed22.engdis.com/Runtime/TestArea.html",
+                body=body,
+            )["res"]
+            self.assertFalse(out_no_app, body)
+
+            tab_no_app = Mock()
+            tab_no_app.js.side_effect = lambda expr, _b=body: (
+                run_node_js(expr, url="https://ed22.engdis.com/Runtime/TestArea.html", body=_b)["res"]
+            )
+            self.assertFalse(auto.is_final_assessment_complete(tab_no_app, body))
+
+        # 2. Empty navigationService or empty _unitsList / _lessonsList Children -> False
+        for nav in (
+            {},
+            {"_unitsList": {"Children": []}},
+            {"_lessonsList": {"Children": []}},
+            {"_unitsList": {"Children": []}, "_lessonsList": {"Children": []}},
+            {
+                "_unitsList": {"SelectedIndex": 0, "Children": [{"NodeId": "U1", "IsDone": True, "Progress": 1}]},
+                "_lessonsList": {"Children": []},
+            },
+        ):
+            app_empty = {"__comp": {"componentInstance": {"isTestEnv": True, "navigationService": nav}}}
+            out_empty = run_node_js(
+                auto.IS_FINAL_ASSESSMENT_COMPLETE_JS,
+                nodes={"app": app_empty},
+                url="https://ed22.engdis.com/Runtime/TestArea.html",
+                body="You have completed the Final Test.\nYour score is 90%.",
+            )["res"]
+            self.assertFalse(out_empty, f"expected False for nav={nav}")
+
+        # 3. Single-item list that is incomplete and lacks explicit completion banner -> False
+        app_single_inc = {
+            "__comp": {
+                "componentInstance": {
+                    "isTestEnv": True,
+                    "navigationService": {
+                        "_unitsList": {
+                            "SelectedIndex": 0,
+                            "Children": [{"NodeId": "U1", "IsDone": False, "Progress": 0}],
+                        }
+                    },
+                }
+            }
+        }
+        out_single_inc = run_node_js(
+            auto.IS_FINAL_ASSESSMENT_COMPLETE_JS,
+            nodes={"app": app_single_inc},
+            url="https://ed22.engdis.com/Runtime/TestArea.html",
+            body="Your score is 90%.",
+        )["res"]
+        self.assertFalse(out_single_inc)
+
+        # 4. Multi-item list with missing SelectedIndex (-1) and incomplete second unit -> False
+        app_unknown_idx = {
+            "__comp": {
+                "componentInstance": {
+                    "isTestEnv": True,
+                    "navigationService": {
+                        "_unitsList": {
+                            "Children": [
+                                {"NodeId": "U1", "IsDone": True, "Progress": 1},
+                                {"NodeId": "U2", "IsDone": False, "Progress": 0},
+                            ]
+                        }
+                    },
+                }
+            }
+        }
+        out_unknown_idx = run_node_js(
+            auto.IS_FINAL_ASSESSMENT_COMPLETE_JS,
+            nodes={"app": app_unknown_idx},
+            url="https://ed22.engdis.com/Runtime/TestArea.html",
+            body="You have completed the Final Test.\nYour score is 90%.",
+        )["res"]
+        self.assertFalse(out_unknown_idx)
+
+    def test_main_fails_closed_on_testarea_score_screen_when_nav_state_is_missing(self):
+        body = "Your score is 90%."
+
+        class Tab:
+            def js(self, expr):
+                if expr == auto.IS_LIVE_ASSESSMENT_SESSION_JS:
+                    return True
+                return run_node_js(
+                    expr,
+                    url="https://ed22.engdis.com/Runtime/TestArea.html",
+                    body=body,
+                )["res"]
+
+        state = {
+            "unit": "",
+            "lesson": "",
+            "step": "",
+            "counter": None,
+            "total": None,
+            "body": body,
+        }
+        err = io.StringIO()
+        with patch.object(auto.edlib, "tab", return_value=Tab()), \
+             patch.object(auto, "st", return_value=state), \
+             patch.object(auto, "update_live_status"), \
+             patch.object(auto.solver, "source_text", return_value={"resource": "", "body": body}), \
+             patch.object(auto.solver, "neutralize"), \
+             patch.object(auto, "q", return_value=0), \
+             contextlib.redirect_stdout(io.StringIO()), \
+             contextlib.redirect_stderr(err):
+            with self.assertRaises(SystemExit) as ctx:
+                auto.main(max_iter=3)
+
+        self.assertEqual(ctx.exception.code, 6)
+        self.assertIn("lacks verified final completion state", err.getvalue())
+
     def test_main_exits_zero_on_verified_final_testarea_score_screen(self):
         class Tab:
             def js(self, expr):
