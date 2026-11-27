@@ -31,6 +31,38 @@ The harness uses an OpenAI-compatible endpoint for text reasoning, with optional
 - **Multimodal LLM Fallback**: If `GROQ_API_KEY` is omitted, the harness falls back to sending base64 audio directly via `input_audio` chat completions to `OPENAI_MODEL` (e.g. Gemini 3.8 Flash via Google AI Studio at [aistudio.google.com](https://aistudio.google.com/)).
 - **Fallback Chain**: Specify comma-separated model names (e.g. `primary-model,backup-model`). The runner automatically tries the next model if an API error occurs.
 
+## Transcript cache and legacy migration
+
+Media and transcripts in `ED_SCRATCH` use a SHA-256 key of the complete URL
+(including query, excluding fragment). This keeps different paths, hosts and
+query-selected media separate, without putting the URL or token in filenames.
+A refreshed signed URL produces a different entry and may trigger another
+transcription. Hashes are not encryption; protect the cache and logs.
+
+Older `tr_<stem>.txt`, `tr_<filename>.txt`, `tr_<stem>_<ext>.txt` and
+`m_<stem>...` files are left untouched but are not automatically trusted:
+none proves which full URL it came from, even when an old media file exists.
+To reuse a paid transcript, first independently verify its exact source URL,
+then run Python locally with the same `ED_SCRATCH` as the runner:
+
+```python
+import solver
+solver.migrate_legacy_transcript(verified_url, legacy_transcript_path)
+```
+
+Supply these variables interactively in a private environment; do not put signed
+URLs or tokens in shell history, logs, or committed files. Migration copies the
+text without deleting the original and refuses to overwrite an existing URL-keyed
+entry. Publishing uses a temporary file and an atomic hard link within the
+cache directory; the cache filesystem must support hard links. If it does not,
+manual migration fails without replacing the destination; automatic transcription
+still returns its result but cannot persist it. A process killed abruptly may
+leave a hidden `.transcript-*` temporary file, not a valid cache entry. This is
+atomic publication, not a guarantee of persistence after power loss.
+Migrating for a later changed token requires re-verification and another
+migration. Incorrect provenance maps the wrong transcript; if uncertain, allow a
+fresh download/transcription instead.
+
 ## Local Configuration (`.env`)
 
 Copy `.env.example` to `.env` to override settings locally without editing code:
