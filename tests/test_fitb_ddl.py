@@ -1476,6 +1476,131 @@ console.log(JSON.stringify(result));
         result = json.loads(proc.stdout)
         self.assertEqual((result["scope"], result["options"]), ("none", []))
 
+    def test_multiple_owned_loose_menus_do_not_click_stale_option(self):
+        node_bin = shutil.which("node")
+        if not node_bin:
+            self.skipTest("node is required to execute emitted JS")
+        captured = []
+
+        class CaptureTab:
+            def js(self, script):
+                captured.append(script)
+                if "practiceData" in script and "answerLists" in script:
+                    return {"text": "Pick __", "lists": [["alpha", "beta"]],
+                            "domCount": 1, "domLists": [[]]}
+                if "closeOtherMenus(s," in script:
+                    return {"status": "ok", "selected": "", "selectedPlaceholder": True}
+                if "options: res.items.map(getOptText)" in script:
+                    return {"status": "ok", "scope": "portal-linked", "selected": "",
+                            "selectedPlaceholder": True, "options": ["alpha", "beta"]}
+                if "const wantText =" in script:
+                    return {"clicked": 0, "selected": "", "selectedPlaceholder": True}
+                if "return getTriggers().map(" in script:
+                    return [{"selected": "", "selectedPlaceholder": True}]
+                return None
+
+        with patch.object(solver, "ask_json", return_value={"1": "alpha"}), \
+             patch.object(solver.time, "sleep"):
+            solver.solve_fitb(CaptureTab(), "")
+        pick_js = next(s for s in captured if "const wantText =" in s)
+        harness = _NODE_DOM_SHIM + r"""
+const body = new El('body');
+const documentElement = new El('html').append(body);
+const practice = new El('div', 'learning__angPracticeW');
+body.append(practice);
+const s = new El('div', 'DDLOptions__selected', '', {'aria-controls': 'stale-menu good-menu'});
+practice.append(new El('div', 'DDLOptionsW').append(s));
+let staleClicked = false, goodClicked = false;
+const stale = new El('div', 'DDLOptions__option', 'alpha');
+const good = new El('div', 'DDLOptions__option', 'alpha');
+stale.onclick = () => { staleClicked = true; };
+good.onclick = () => { goodClicked = true; };
+body.append(new El('div', '', '', {id: 'stale-menu'}).append(stale, new El('div', 'DDLOptions__option', 'beta')),
+  new El('div', '', '', {id: 'good-menu'}).append(good, new El('div', 'DDLOptions__option', 'beta')));
+const document = {body, documentElement,
+  querySelectorAll: q => documentElement.querySelectorAll(q),
+  querySelector: q => documentElement.querySelector(q)};
+const window = {getComputedStyle: el => el.style};
+const result = """ + pick_js + r""";
+console.log(JSON.stringify({staleClicked, goodClicked, result}));
+"""
+        proc = subprocess.run([node_bin, "-e", harness], check=True, capture_output=True, text=True)
+        result = json.loads(proc.stdout)
+        self.assertFalse(result["staleClicked"])
+        self.assertFalse(result["goodClicked"])
+        self.assertEqual(result["result"]["clicked"], 0)
+
+        # Distinct explicit option IDs cannot be collapsed merely because the
+        # options share a generic parent. Each ID claims its own target.
+        direct_id_harness = harness.replace(
+            "new El('div', 'DDLOptions__option', 'alpha');",
+            "new El('div', 'DDLOptions__option', 'alpha', {id: 'stale-menu'});", 1
+        ).replace(
+            "const good = new El('div', 'DDLOptions__option', 'alpha');",
+            "const good = new El('div', 'DDLOptions__option', 'alpha', {id: 'good-menu'});"
+        ).replace(
+            "body.append(new El('div', '', '', {id: 'stale-menu'}).append(stale, new El('div', 'DDLOptions__option', 'beta')),\n  new El('div', '', '', {id: 'good-menu'}).append(good, new El('div', 'DDLOptions__option', 'beta')));",
+            "body.append(new El('div', 'overlay').append(stale, good));"
+        )
+        proc = subprocess.run([node_bin, "-e", direct_id_harness], check=True, capture_output=True, text=True)
+        result = json.loads(proc.stdout)
+        self.assertFalse(result["staleClicked"])
+        self.assertFalse(result["goodClicked"])
+        self.assertEqual(result["result"]["clicked"], 0)
+
+    def test_mixed_ambiguous_group_does_not_click_visible_specific_menu(self):
+        node_bin = shutil.which("node")
+        if not node_bin:
+            self.skipTest("node is required to execute emitted JS")
+        captured = []
+
+        class CaptureTab:
+            def js(self, script):
+                captured.append(script)
+                if "practiceData" in script and "answerLists" in script:
+                    return {"text": "Pick __", "lists": [["alpha", "beta"]],
+                            "domCount": 1, "domLists": [[]]}
+                if "closeOtherMenus(s," in script:
+                    return {"status": "ok", "selected": "", "selectedPlaceholder": True}
+                if "options: res.items.map(getOptText)" in script:
+                    return {"status": "ok", "scope": "portal-linked", "selected": "",
+                            "selectedPlaceholder": True, "options": ["alpha", "beta"]}
+                if "const wantText =" in script:
+                    return {"clicked": 0, "selected": "", "selectedPlaceholder": True}
+                if "return getTriggers().map(" in script:
+                    return [{"selected": "", "selectedPlaceholder": True}]
+                return None
+
+        with patch.object(solver, "ask_json", return_value={"1": "alpha"}), \
+             patch.object(solver.time, "sleep"):
+            solver.solve_fitb(CaptureTab(), "")
+        pick_js = next(s for s in captured if "const wantText =" in s)
+        harness = _NODE_DOM_SHIM + r"""
+const body = new El('body');
+const documentElement = new El('html').append(body);
+const practice = new El('div', 'learning__angPracticeW');
+body.append(practice);
+const s = new El('div', 'DDLOptions__selected', '', {'aria-controls': 'orphan'});
+const wrapper = new El('div', 'DDLOptionsW', '', {'aria-owns': 'good-menu'}).append(s);
+practice.append(wrapper);
+let clicked = false;
+const orphan = new El('div', 'DDLOptions__option', 'alpha', {id: 'orphan'});
+const good = new El('div', 'DDLOptions__option', 'alpha');
+good.onclick = () => { clicked = true; };
+body.append(new El('div', 'overlay').append(orphan, good));
+good.attrs.id = good.id = 'good-menu';
+const document = {body, documentElement,
+  querySelectorAll: q => documentElement.querySelectorAll(q),
+  querySelector: q => documentElement.querySelector(q)};
+const window = {getComputedStyle: el => el.style};
+const result = """ + pick_js + r""";
+console.log(JSON.stringify({clicked, result}));
+"""
+        proc = subprocess.run([node_bin, "-e", harness], check=True, capture_output=True, text=True)
+        result = json.loads(proc.stdout)
+        self.assertFalse(result["clicked"])
+        self.assertEqual(result["result"]["clicked"], 0)
+
     def test_pick_js_fails_closed_in_node_when_target_option_disappears(self):
         node_bin = shutil.which("node")
         if not node_bin:

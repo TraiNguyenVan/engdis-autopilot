@@ -1123,8 +1123,23 @@ _FITB_DOM_JS = r"""
       // Distinct menus independently linked to one trigger conflict: never let
       // their identical option text turn an ambiguous lookup into a click.
       const menuSel = '.DDLOptions__list, [role="listbox"]';
-      const groups = new Set(linkedVis.map(el => (el.closest && el.closest(menuSel)) || null));
-      if (groups.size === 1) return {items: linkedVis, scope: 'portal-linked'};
+      // Direct references to distinct loose option nodes are distinct targets,
+      // even when those nodes happen to share an unlabelled parent.
+      const directIds = new Set(linkedVis.filter(el => el.id).map(el => String(el.id)));
+      const directTargets = new Set();
+      for (const sc of getContainers(s).concat([s])) {
+        for (const attr of ['aria-controls', 'aria-owns', 'data-target', 'data-dropdown', 'data-menu', 'data-portal']) {
+          String(getAttr(sc, attr) || '').split(/\s+/).forEach(tok => {
+            const id = tok.replace(/^#/, '');
+            if (directIds.has(id)) directTargets.add(id);
+          });
+        }
+      }
+      if (directTargets.size > 1) return {items: [], scope: 'none'};
+      const groups = new Set(linkedVis.map(el =>
+        (el.closest && el.closest(menuSel)) || el.parentElement || null));
+      if (!groups.has(null) && !groups.has(document.body) && !groups.has(document.documentElement) && groups.size === 1)
+        return {items: linkedVis, scope: 'portal-linked'};
       return {items: [], scope: 'none'};
     }
     for (const c of containers) {
