@@ -48,12 +48,14 @@ Operational procedures for AI coding agents running, diagnosing, and repairing t
 
 > **CRITICAL EXECUTION RULE**: Never run `python3 cover.py` for headless batch runs directly on the host machine; execute headless coursework via Docker. Never guess course or units—inspect active LMS state first (`--dry` / `ED_DRY_RUN=1`) or ask explicitly.
 
+Compose defaults to `ED_DRY_RUN=1`: this inventories eligible lessons and does not run the solver. Set `ED_DRY_RUN=0` only for an authorized run. Compose does not forward the host's `ED_UNATTENDED` by default; use `docker compose run -e` to pass it explicitly.
+
 ```bash
 # Multi-unit batch run via Docker (Agent Yield mode: exits rc=6 on stall)
-ED_COURSE="<COURSE>" ED_UNITS="<UNITS>" ED_PASSES=2 docker compose run --rm engdis
+ED_COURSE="<COURSE>" ED_UNITS="<UNITS>" ED_PASSES=2 ED_DRY_RUN=0 docker compose run --rm engdis
 
-# Multi-unit unattended run via Docker (skips stalls, exits rc=0)
-ED_COURSE="<COURSE>" ED_UNITS="<UNITS>" ED_PASSES=2 ED_UNATTENDED=1 docker compose run --rm engdis
+# Multi-unit unattended run via Docker (skips stalled tasks; other failures can still exit nonzero)
+ED_COURSE="<COURSE>" ED_UNITS="<UNITS>" ED_PASSES=2 ED_DRY_RUN=0 docker compose run --rm -e ED_UNATTENDED=1 engdis
 
 # Long-running inspect container (engdis_inspect)
 docker exec engdis_inspect python3 -u cover.py <UNITS> 2 --course="<COURSE>"
@@ -70,15 +72,15 @@ python3 bootstrap_browser.py --headed --port 9225 --profile ~/.ed-profile
 ## Operational Procedures
 
 ### 1. Diagnosing Stalled Exercises via Fixtures
-When `auto.py` detects 4 consecutive unchanged ticks, it dumps the full task state to:
-`logs/fixtures/stuck_<lesson>_<counter>_<timestamp>.json`
+When `auto.py` detects 4 consecutive unchanged ticks, it attempts to dump task state to `ED_FIXTURE_DIR` or `/data/logs/fixtures`, falling back to the repo's `logs/fixtures` if the directory cannot be created. The filename is `stuck_<lesson>_<counter>_<timestamp>.json`; inspect the reported path or dump error.
 
-The fixture includes `url`, `body` (visible text), `html` (raw DOM), `compState` (Angular properties like `doneProgress`, `isSubmitted`, `currentState`, `taskType`), `interactives` (visible clickables with `tag`, `cls`, `id`, `text`, `rect`), and `screenshot` (base64 PNG).
+The fixture can include `url`, `body` (visible text), `html` (raw DOM), `practiceData`, `compState` (Angular properties like `doneProgress`, `isSubmitted`, `currentState`, `taskType`), and `interactives` (visible clickables with `tag`, `cls`, `id`, `text`, `rect`). `screenshot` may be `null`: `dump_task` calls `t.cdp`, but `driver.Tab` has no `cdp` method; capture can also fail. Do not assume an image was recorded.
 
 ```python
-import json, glob
-path = sorted(glob.glob("logs/fixtures/stuck_*.json"))[-1]
-data = json.load(open(path))
+import json
+path = "<reported fixture path>"
+with open(path, encoding="utf-8") as f:
+    data = json.load(f)
 print("URL:", data.get("url"))
 print("BODY:", data.get("body", "")[:300])
 print("COMP STATE:", data.get("compState"))
@@ -86,13 +88,10 @@ print("CLICKABLES:", [(el["tag"], el["cls"], el["text"][:30]) for el in data.get
 ```
 
 ### 2. Media Acceleration (Explore Steps)
-Audio and video playback in Explore steps is accelerated to `playbackRate = 16.0` (`solver.play_media(t)`), triggering server completion beacons in 2–4 seconds. If Step 1 Explore already shows `Progress >= 0.999`, skip media replay and switch to Step 2 Practice via `solver.set_step(t, 1)`.
+`solver.play_media(t)` attempts playback at `playbackRate = 16.0`; accelerated or started playback does not prove server completion. Verify saved progress after playback and navigation. If the step remains incomplete, inspect the actual activity rather than skipping it.
 
 ### 3. Speaking Gates & Fake Stream Simulation (Known Limitation)
-Interactive speaking tasks (`Interact 1` / `Practice 1`) require real spoken audio and are **not solved** with `--use-fake-device-for-media-stream`:
-1. `auto.handle_speaking` clicks `.button.continue` / `Start` (or `.openSpeech__SentTTBtn` if present) and waits 3.5s while streaming fake silence.
-2. If the platform returns `Try again` or fails 3 times, `auto.py` exits with `SPEAK-BLOCKED` (`rc=3`).
-Lessons containing speaking exercises cap at 67% progress. Do not treat 67% on speaking lessons as actionable bugs or stalls.
+Speaking tasks may reject fake audio. A rejected recording returns `speak: blocked`; the main loop counts speaking attempts and exits `SPEAK-BLOCKED` (`rc=3`) after three on the same task. Treat actual speech recognition and saved completion as unverified; do not infer a fixed completion percentage from a speaking exercise. Inspect unfinished activities individually. The current disabled-Start fallback calls an internal progress setter; do not rely on it as evidence that speech was completed or use it to manufacture progress.
 
 ### 4. Course Navigation Drift Guard
 When recovering from modal locks or step-switch stalls via `t.goto(HOME)`, re-bind the active course:
@@ -129,14 +128,14 @@ Verify `componentInstance.doneProgress === true`.
 Never open ad-hoc WebSocket connections to CDP port 9225 while `cover.py` or `auto.py` is running in the background. Concurrent connections lock the DevTools loop and cause command timeouts. Read status non-invasively via `status.py`, `live_status.json`, or log tails.
 
 ### 9. Test Score Screen Auto-Advance
-When assessment displays `"Your test score is: 100%"` or `"Review your answers"`, do not retry questions. Click the next arrow button (`.arrow-right`, `.nextStepArrow`) or invoke `solver.set_next_step(t)` to complete lesson handoff.
+`auto.py` attempts to advance on score text or on `"Review your answers"` combined with `"next arrow"`; review text alone does not prove a final result or lesson completion. Distinguish lesson-test, assessment-section, and final assessment screens; verify the saved score and each required step separately. Do not retry or submit an already recorded test without explicit authorization. If the screen or transition is ambiguous, stop and inspect it rather than assuming handoff succeeded.
 
 ### 10. Autonomous Agent Yield & Hot-Fix Protocol
 The harness halts and signals coding agents with exit code `rc=6` and `[AGENT-ACTION-REQUIRED]` on `stderr` when:
-1. **Exercise Stall**: Any exercise fails to advance for 4 consecutive ticks (`logs/fixtures/stuck_*.json` is dumped).
-2. **Under-Completion Gate**: The supervisor batch finishes, but one or more unblocked lessons remain `< 100%` complete. Lessons marked blocked are excluded from this gate; exclusion does not establish completion.
+1. **Exercise Stall**: The task signature is unchanged for 4 consecutive ticks; the worker attempts a fixture dump and reports its path or error.
+2. **Under-Completion Gate**: In supervised mode, the final check examines all reported lessons, including lessons outside the selected scope, excluding those marked blocked. It flags normalized final progress `< 0.999` and returns `rc=6`; exclusion does not establish completion. The gate also runs after a dry inventory, so `rc=6` alone does not prove a solver ran or that a selected lesson stalled.
 
-**Fast-Forward Resumption**: When targeted with `--lesson="..."`, `auto.py` reads step progress from `ed-la-dropdownlist` and fast-forwards to the first incomplete step. In `--unattended` / `ED_UNATTENDED=1` mode, stalls and under-completions are logged and the harness exits `rc=0`.
+**Fast-Forward Resumption**: When targeted with `--lesson="..."`, `auto.py` reads step progress from `ed-la-dropdownlist` and fast-forwards to the first incomplete step. In `--unattended` / `ED_UNATTENDED=1` mode, a stalled worker logs a warning and exits `rc=0`, and the supervisor skips its final under-completion gate. Other failures can still produce nonzero exits; `rc=0` does not prove completion.
 
 Remediation loop on `rc=6`:
 1. Inspect the dumped fixture DOM and `compState`.

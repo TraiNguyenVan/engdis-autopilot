@@ -16,9 +16,42 @@ class TestSkillValidity(unittest.TestCase):
             content = f.read()
         self.assertIn("two lines: username, then password", content)
         self.assertNotIn("`username:password` file", content)
-        self.assertIn("unblocked lessons", content)
-        self.assertNotIn("non-speaking lessons remain", content)
         self.assertIn("small non-critical run", content)
+
+    def test_completion_gate_documents_threshold_and_scope(self):
+        with open(SKILL_PATH, encoding="utf-8") as f:
+            content = f.read()
+        self.assertIn("`< 0.999`", content)
+        self.assertIn("all reported lessons", content)
+        self.assertIn("excluding those marked blocked", content)
+        self.assertIn("including lessons outside the selected scope", content)
+        self.assertNotIn("unblocked lessons remain `< 100%`", content)
+
+    def test_compose_examples_explicitly_configure_execution(self):
+        with open(SKILL_PATH, encoding="utf-8") as f:
+            content = f.read()
+        self.assertIn("defaults to `ED_DRY_RUN=1`", content)
+        self.assertIn("ED_DRY_RUN=0", content)
+        self.assertIn("docker compose run --rm -e ED_UNATTENDED=1 engdis", content)
+        self.assertNotIn('ED_UNATTENDED=1 docker compose run --rm engdis', content)
+
+    def test_speaking_does_not_assume_universal_cap(self):
+        with open(SKILL_PATH, encoding="utf-8") as f:
+            content = f.read()
+        self.assertNotIn("cap at 67%", content)
+        self.assertIn("do not infer a fixed completion percentage", content)
+
+    def test_review_screen_does_not_prove_completion(self):
+        with open(SKILL_PATH, encoding="utf-8") as f:
+            content = f.read()
+        self.assertIn("review text alone does not prove", content)
+        self.assertIn("verify the saved score and each required step", content)
+
+    def test_fixture_screenshot_can_be_null(self):
+        with open(SKILL_PATH, encoding="utf-8") as f:
+            content = f.read()
+        self.assertIn("`screenshot` may be `null`", content)
+        self.assertIn("`driver.Tab` has no `cdp` method", content)
 
     def test_skill_frontmatter(self):
         with open(SKILL_PATH, "r", encoding="utf-8") as f:
