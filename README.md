@@ -191,6 +191,7 @@ flowchart TD
 
 - **Docker-Enforced CDP Automation**: Direct DOM instrumentation, interaction simulation, and navigation over Chrome DevTools Protocol inside isolated containers.
 - **Multimodal LLM Solvers**: Solves text, multiple-choice, fill-in-the-blank, and drag-and-drop tasks using OpenAI-compatible endpoints (`OPENAI_MODEL`).
+- **LLM timeout and DNS limitation**: `ED_LLM_TIMEOUT` sets the per-attempt deadline in seconds (default 15). A request can return on timeout while its daemon fetch worker is still blocked in the system DNS resolver, which Python cannot cancel by closing the socket. Repeated stalled lookups can accumulate workers until DNS returns or the process exits; this is not a bounded DNS cleanup guarantee. Ordinary socket and response timeouts still trigger failover/retries.
 - **Unified Audio Transcription**: Transcribes listening exercises via base64 audio chat completions—no separate Whisper service needed.
 - **Low-RAM Containment**: Strict container limits (1280 MB RAM, 256 MB SHM) and Chromium heap capping for low-spec hosts.
 - **Dual Execution Modes**: Autonomous Agent Yield mode (`rc=6` on stalls) for interactive agent pairing, plus Unattended mode (`--unattended` / `ED_UNATTENDED=1`) for headless non-blocking runs.

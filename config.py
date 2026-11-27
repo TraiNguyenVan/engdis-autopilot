@@ -85,6 +85,7 @@ OPENAI_MODEL: str = os.environ.get("OPENAI_MODEL") or os.environ.get("ED_LLM_MOD
 LLM_URL: str = _build_chat_completions_url(OPENAI_BASE_URL)
 LLM_KEY: str = OPENAI_API_KEY
 LLM_MODELS: List[str] = [m.strip() for m in OPENAI_MODEL.split(",") if m.strip()]
+LLM_TIMEOUT: int = _get_int("ED_LLM_TIMEOUT", 15)
 
 # Groq Whisper STT Configuration
 GROQ_API_KEY: str = os.environ.get("GROQ_API_KEY", "")
