@@ -404,6 +404,7 @@ class TranscriptCacheCompatibilityTests(unittest.TestCase):
 class AutoTranscriptIntegrationTests(unittest.TestCase):
     def test_handle_test_attaches_dom_transcript_before_do_task(self):
         tab = Mock()
+        tab.js.return_value = 0
         seen = []
 
         def fake_do_task(_t, src):
@@ -421,6 +422,7 @@ class AutoTranscriptIntegrationTests(unittest.TestCase):
 
     def test_handle_test_uses_prefer_last_media_and_extensionless_key(self):
         tab = Mock()
+        tab.js.return_value = 0
         seen = []
 
         def fake_do_task(_t, src):
@@ -443,6 +445,8 @@ class AutoTranscriptIntegrationTests(unittest.TestCase):
     def _run_practice_iteration(self, dom_val, media_val, asr_val, source_side_effect=None, max_iter=1, states=None):
         class Tab:
             def js(self, expr):
+                if "__ed_guard_value__" in expr:
+                    return {"__ed_guard_value__": "mcq" if "return 'mcq'" in expr else 0}
                 if expr == auto.IS_TEST_JS:
                     return 0
                 if "return 'mcq'" in expr:
@@ -541,6 +545,8 @@ class AutoTranscriptIntegrationTests(unittest.TestCase):
         # Re-run with DOM transcript present only on Q1
         class Tab:
             def js(self, expr):
+                if "__ed_guard_value__" in expr:
+                    return {"__ed_guard_value__": "mcq" if "return 'mcq'" in expr else 0}
                 if expr == auto.IS_TEST_JS:
                     return 0
                 if "return 'mcq'" in expr:

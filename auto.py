@@ -2,7 +2,7 @@
 
 Usage: python3 auto.py [max_iterations]
 """
-import json, os, sys, time
+import json, os, re, sys, time
 
 import edlib, login, poll, solver
 import config
@@ -51,6 +51,7 @@ def st(t):
             const app = window.ng?.probe?.(document.querySelector('app'))?.componentInstance;
             const aNode = app?.navigationService?._stepsList?.SelectedNode;
             if (aNode?.NodeId) return (aNode.Name || 'Step') + ':' + aNode.NodeId;
+            if (aNode?.Name) return aNode.Name;
             return d[1] ? d[1].innerText.split('\\n')[0] : '';
         })()"""),
         "lesson": t.js("""(() => {const d=document.querySelectorAll('ed-la-dropdownlist'); return d[0]? d[0].innerText.split('\\n')[0] : '';})()"""),
@@ -98,8 +99,9 @@ def st(t):
     }
 
 
-def click(t, sel):
-    return t.js("(() => {const e=document.querySelector(%s); if(!e) return 0; e.click(); return 1;})()" % json.dumps(sel))
+def click(t, sel, *, retry=True):
+    expr = "(() => {const e=document.querySelector(%s); if(!e) return 0; e.click(); return 1;})()" % json.dumps(sel)
+    return t.js(expr) if retry else t.js(expr, retry=False)
 
 
 def click_text(t, text):
@@ -202,6 +204,629 @@ def next_intro_attempt(tries, key, limit=3):
     return tries[key] <= limit
 
 
+_ORIG_EDLIB_TAB = edlib.tab
+
+IS_TEST_AREA_JS = """(() => {
+    if (/TestArea\\.html|\\/assessment/i.test(window.location?.href || '')) return true;
+    const app = window.ng?.probe?.(document.querySelector('app'))?.componentInstance;
+    if (app?.isTestEnv) return true;
+    if (document.querySelectorAll('ed-la-dropdownlist').length > 0) return false;
+    return Boolean(document.querySelector('#learning__tasksNav_submitTest'));
+})()"""
+
+IS_LIVE_ASSESSMENT_SESSION_JS = """(() => {
+    const href = String(window.location?.href || '');
+    if (href.indexOf('#/login') >= 0 || /\\/login\\b/i.test(href)) return false;
+    const body = String(document.body?.innerText || '');
+    if (/Member Login/i.test(body) && !/Hello /i.test(body)) return false;
+    if (document.querySelectorAll('ed-la-dropdownlist').length > 0) return false;
+    const app = window.ng?.probe?.(document.querySelector('app'))?.componentInstance;
+    const onTestArea = Boolean(app?.isTestEnv) || /TestArea\\.html|\\/assessment/i.test(href) || Boolean(document.querySelector('#learning__tasksNav_submitTest'));
+    if (!onTestArea) return false;
+    const hasNav = Boolean(app?.navigationService);
+    const hasTestDom = Boolean(
+        document.querySelector(
+            '#pmContainer, ed-la-practicearea, #learning__tasksNav_submitTest, ' +
+            '.learning__taskNavPCCurrentTask, .learning__taskNavPagerCounterIW--intro, .btnStartTest'
+        )
+    );
+    return hasNav || hasTestDom || body.trim().length > 80;
+})()"""
+
+NAV_STATE_SIG_JS = """(() => {
+    const app = window.ng?.probe?.(document.querySelector('app'))?.componentInstance;
+    const nav = app?.navigationService;
+    const uIdx = nav?._unitsList?.SelectedIndex ?? '-';
+    const lIdx = nav?._lessonsList?.SelectedIndex ?? '-';
+    const lId = nav?._lessonsList?.SelectedNode?.NodeId ?? '-';
+    const sIdx = nav?._stepsList?.SelectedIndex ?? '-';
+    const sId = nav?._stepsList?.SelectedNode?.NodeId ?? '-';
+    const tIdx = nav?._tasksList?.SelectedIndex ?? '-';
+    const tId = nav?._tasksList?.SelectedNode?.NodeId ?? '-';
+    const cur = document.querySelector('.learning__taskNavPCCurrentTask')?.innerText?.trim() || '';
+    const intro = document.querySelector('.learning__taskNavPagerCounterIW--intro')?.innerText?.trim() || '';
+    return [uIdx, lIdx, lId, sIdx, sId, tIdx, tId, cur, intro].join('|');
+})()"""
+
+TEST_WIDGETS_JS = (
+    "return document.querySelectorAll("
+    "'.prMCQ__qaSet, .prFITB__qaSet, .dnditem, .dndZone, .lessonMultipleAnswer, "
+    ".TTpanswerDiv, .openSpeech__btnStart, .speakingInteract, ed-la-mcq, "
+    ".prDDL__qaSet, .prOpenEnded__qaSet, .DDLOptions__selected, "
+    ".prOpenEnded__qaItemText, .writingEditFrame, textarea.writingTextarea, "
+    ".OpenEndedQ, .learning__selectTxt_st, span.st'"
+    ").length ? 1 : 0;"
+)
+
+_SECTION_KEY_HELPER_JS = """
+    const sectionKey = (n) => {
+        if (!n || typeof n !== 'object') return '';
+        for (const k of ['SectionId', 'ParentId', 'ParentNodeId', 'UnitId']) {
+            if (n[k] !== undefined && n[k] !== null && String(n[k]) !== '') {
+                return k + ':' + String(n[k]);
+            }
+        }
+        const name = String(n.Name || '').trim();
+        if (!name) return '';
+        if (/^section\\b/i.test(name)) {
+            return 'sec:' + name.toLowerCase();
+        }
+        const m = name.match(/^(.+?)\\s+\\d+(?:\\s+[A-Za-z0-9]{2,6})?\\s*$/);
+        if (m) {
+            return 'grp:' + m[1].trim().toLowerCase();
+        }
+        return 'name:' + name.toLowerCase();
+    };
+    const resolveIdx = (listObj) => {
+        const items = listObj?.Children;
+        if (!Array.isArray(items) || !items.length) return -1;
+        const selId = listObj?.SelectedNode?.NodeId;
+        if (selId !== undefined && selId !== null && selId !== '') {
+            const byId = items.findIndex(c => c && c.NodeId === selId);
+            return byId >= 0 ? byId : -1;
+        }
+        if (typeof listObj?.SelectedIndex === 'number' && listObj.SelectedIndex >= 0 && listObj.SelectedIndex < items.length) {
+            return listObj.SelectedIndex;
+        }
+        return -1;
+    };
+"""
+
+ADVANCE_NEXT_PART_JS = f"""(() => {{
+    if (document.querySelectorAll('ed-la-dropdownlist').length > 0) return 0;
+    const app = window.ng?.probe?.(document.querySelector('app'))?.componentInstance;
+    const onTestArea = Boolean(app?.isTestEnv) || /TestArea\\.html|\\/assessment/i.test(window.location?.href || '');
+    if (!onTestArea) return 0;
+    const nav = app?.navigationService;
+    const lList = nav?._lessonsList;
+    const lessons = lList?.Children;
+    if (!nav || !Array.isArray(lessons) || !lessons.length || typeof nav.selectedChanged !== 'function') {{
+        return 0;
+    }}
+    {_SECTION_KEY_HELPER_JS}
+    const curIdx = resolveIdx(lList);
+    if (curIdx < 0 || curIdx + 1 >= lessons.length) return 0;
+    const curLesson = lessons[curIdx];
+    const nxt = lessons[curIdx + 1];
+    if (!nxt || nxt.NodeId === undefined || nxt.NodeId === null || nxt.NodeId === '') return 0;
+    if (sectionKey(curLesson) !== sectionKey(nxt)) return 0;
+    nxt.IsLocked = false;
+    try {{
+        nav.selectedChanged({{
+            nodeId: nxt.NodeId,
+            courseNodeType: 3,
+            selectedIndex: curIdx + 1
+        }});
+        return 1;
+    }} catch (e) {{}}
+    return 0;
+}})()"""
+
+ADVANCE_TEST_INTRO_STEP_JS = f"""(() => {{
+    if (document.querySelectorAll('ed-la-dropdownlist').length > 0) return 0;
+    const app = window.ng?.probe?.(document.querySelector('app'))?.componentInstance;
+    const onTestArea = Boolean(app?.isTestEnv) || /TestArea\\.html|\\/assessment/i.test(window.location?.href || '');
+    if (!onTestArea) return 0;
+    const nav = app?.navigationService;
+    const sList = nav?._stepsList;
+    const steps = sList?.Children;
+    if (!nav || !Array.isArray(steps) || steps.length < 2 || typeof nav.selectedChanged !== 'function') {{
+        return 0;
+    }}
+    {_SECTION_KEY_HELPER_JS}
+    const curIdx = resolveIdx(sList);
+    if (curIdx < 0 || curIdx + 1 >= steps.length) return 0;
+    const curStep = steps[curIdx];
+    if (!/testintronode|^intro$/i.test(String(curStep?.Name || '').trim())) return 0;
+    const nextIdx = curIdx + 1;
+    const nxt = steps[nextIdx];
+    if (!nxt || nxt.NodeId === undefined || nxt.NodeId === null || nxt.NodeId === '') return 0;
+    nxt.IsLocked = false;
+    try {{
+        nav.selectedChanged({{
+            nodeId: nxt.NodeId,
+            courseNodeType: 4,
+            selectedIndex: nextIdx
+        }});
+        return 1;
+    }} catch (e) {{}}
+    return 0;
+}})()"""
+
+UNANSWERED_TEST_DOM_JS = """const mcqSets = [...document.querySelectorAll('.prMCQ__qaSet')];
+const hasEmptyMcqHost = mcqSets.length === 0 && document.querySelectorAll('ed-la-mcq').length > 0;
+const mcqUnanswered = hasEmptyMcqHost || mcqSets.some(
+    e => !e.querySelector('.prMCQ__answers:not(.hide) .layout__radio:checked, .prMCQ__answers--checked')
+);
+
+const ddlSets = [...document.querySelectorAll('.prFITB__qaSet, .prDDL__qaSet')];
+const ddlSelected = [...document.querySelectorAll('.DDLOptions__selected')];
+const fitbInputs = [...document.querySelectorAll('.prFITB__qaSet input[type=text], .prFITB__qaSet select')];
+const ddlEmptyHost = ddlSets.length > 0 && ddlSelected.length === 0 && fitbInputs.length === 0;
+const ddlUnanswered = ddlEmptyHost
+    || ddlSelected.some(e => !String(e.innerText || e.textContent || '').trim())
+    || fitbInputs.some(e => !String(e.value || '').trim());
+
+const allZones = [...document.querySelectorAll('.dndZone')];
+const targetZones = allZones.filter(z => {
+    const dg = (typeof z.getAttribute === 'function' ? z.getAttribute('dg_name') : z.dg_name) || '';
+    const id = z.id || (typeof z.getAttribute === 'function' ? z.getAttribute('id') : '') || '';
+    return dg !== 'TTpTablePlaceHolder' && id !== 'TTpTablePlaceHolder';
+});
+const dndUnanswered = (allZones.length > 0 && targetZones.length === 0) || targetZones.some(z => {
+    const hasItem = typeof z.querySelector === 'function' && !!z.querySelector('.dnditem, .draggable, .wordBankTile');
+    const hasText = String(z.innerText || z.textContent || '').trim().length > 0;
+    return !hasItem && !hasText;
+});
+
+const ttpDivs = [...document.querySelectorAll('.TTpanswerDiv')];
+const ttpUnanswered = ttpDivs.some(el => {
+    const ans = (typeof el.getAttribute === 'function' ? el.getAttribute('ans') : el.ans) || '';
+    return !String(ans).trim() && !String(el.innerText || el.textContent || '').trim();
+});
+
+const openSets = [...document.querySelectorAll('.prOpenEnded__qaSet')];
+const openInputs = [...document.querySelectorAll('.prOpenEnded__qaItemText')];
+const openUnanswered = (openSets.length > 0 && openInputs.length === 0)
+    || openInputs.some(el => !String(el.value || el.innerText || '').trim());
+
+const errfixInputs = [...document.querySelectorAll(
+    '.writingEditFrame .writingEditPracticeWrapper input[type=text], ' +
+    '.writingEditFrame .writingEditPracticeWrapper textarea'
+)];
+const errfixUnanswered = errfixInputs.some(el => !String(el.value || '').trim());
+
+const multiItems = [...document.querySelectorAll('.lessonMultipleAnswer')];
+const multiAnswered = multiItems.length > 0 && multiItems.some(e =>
+    e.classList?.contains('selected') || e.classList?.contains('checked')
+    || (typeof e.querySelector === 'function' && !!e.querySelector('input:checked, .checked, .selected'))
+);
+const multiUnanswered = multiItems.length > 0 && !multiAnswered;
+
+const selectSpans = [...document.querySelectorAll('.learning__selectTxt_st, span.st')];
+const selectAnswered = selectSpans.length > 0 && selectSpans.some(e =>
+    e.classList?.contains('selected') || e.classList?.contains('active')
+);
+const selectUnanswered = selectSpans.length > 0 && !selectAnswered;
+
+const writingAreas = [...document.querySelectorAll('.writingEditFrame textarea, textarea.writingTextarea, .OpenEndedQ textarea')];
+const writingAnswered = writingAreas.some(e => String(e.value || e.innerText || '').trim().length > 0)
+    || Boolean(window.tinymce?.activeEditor?.getContent && String(window.tinymce.activeEditor.getContent({format: 'text'}) || '').trim().length > 0);
+
+const hasPositiveEvidence = (mcqSets.length > 0 && !mcqUnanswered)
+    || (ddlSelected.length > 0 && !ddlUnanswered)
+    || (fitbInputs.length > 0 && !ddlUnanswered)
+    || (targetZones.length > 0 && !dndUnanswered)
+    || (ttpDivs.length > 0 && !ttpUnanswered)
+    || (openInputs.length > 0 && !openUnanswered)
+    || (errfixInputs.length > 0 && !errfixUnanswered)
+    || multiAnswered
+    || selectAnswered
+    || writingAnswered;
+
+const anyIncomplete = mcqUnanswered || ddlUnanswered || dndUnanswered
+    || ttpUnanswered || openUnanswered || errfixUnanswered
+    || multiUnanswered || selectUnanswered;
+
+return (anyIncomplete || !hasPositiveEvidence) ? 1 : 0;"""
+
+ASSESSMENT_SUBMIT_STATE_JS = f"""(() => {{
+    const href = String(window.location?.href || '');
+    const app = window.ng?.probe?.(document.querySelector('app'))?.componentInstance;
+    const urlAssessment = /TestArea\\.html|\\/assessment/i.test(href);
+    if (document.querySelectorAll('ed-la-dropdownlist').length > 0) return (urlAssessment || app?.isTestEnv) ? 'unknown' : 'not-assessment';
+    const onTestArea = Boolean(app?.isTestEnv) || urlAssessment || Boolean(document.querySelector('#learning__tasksNav_submitTest'));
+    if (!onTestArea) return 'not-assessment';
+
+    const nav = app?.navigationService;
+    const lList = nav?._lessonsList;
+    const lessons = lList?.Children;
+    if (!nav || !Array.isArray(lessons) || !lessons.length) return 'unknown';
+
+    {_SECTION_KEY_HELPER_JS}
+    const isIntro = (n) => /testintronode|^intro$/i.test(String(n?.Name || '').trim());
+    const isDone = (n) => Boolean(n?.IsDone) || Number(n?.Progress ?? 0) >= 0.999;
+
+    const curLessonIdx = resolveIdx(lList);
+    if (curLessonIdx < 0) return 'unknown';
+
+    const tList = nav?._tasksList;
+    const curTasks = Array.isArray(tList?.Children) ? tList.Children : [];
+    const curTaskIdx = resolveIdx(tList);
+    if (!curTasks.length || curTaskIdx < 0) return 'unknown';
+
+    // Check current part's tasks first (only curTaskIdx is excused because DOM answer was just verified)
+    for (let i = 0; i < curTasks.length; i++) {{
+        const tk = curTasks[i];
+        if (!tk || isIntro(tk) || i === curTaskIdx) continue;
+        if (!isDone(tk)) return 'incomplete';
+    }}
+    // If curTaskIdx is not the last non-intro task of curTasks, not ready to submit
+    for (let i = curTaskIdx + 1; i < curTasks.length; i++) {{
+        if (curTasks[i] && !isIntro(curTasks[i])) return 'incomplete';
+    }}
+
+    // Check steps within current lesson if _stepsList has multiple non-intro steps
+    const sList = nav?._stepsList;
+    if (Array.isArray(sList?.Children) && sList.Children.length > 1) {{
+        const curStepIdx = resolveIdx(sList);
+        if (curStepIdx < 0) return 'unknown';
+        for (let i = 0; i < sList.Children.length; i++) {{
+            const stNode = sList.Children[i];
+            if (!stNode || isIntro(stNode) || i === curStepIdx) continue;
+            if (!isDone(stNode)) return 'incomplete';
+        }}
+    }}
+
+    const curKey = sectionKey(lessons[curLessonIdx]);
+    const sectionIndices = [];
+    for (let i = 0; i < lessons.length; i++) {{
+        const l = lessons[i];
+        if (!l || isIntro(l)) continue;
+        if (sectionKey(l) === curKey) sectionIndices.push(i);
+    }}
+    if (!sectionIndices.length) return 'unknown';
+
+    // If another part in the same section follows curLessonIdx, advance to next part instead of submitting
+    const lastSectionLessonIdx = sectionIndices[sectionIndices.length - 1];
+    if (curLessonIdx < lastSectionLessonIdx) {{
+        return 'next-part';
+    }}
+
+    const collectTasks = (lesson) => {{
+        if (!Array.isArray(lesson?.Children) || !lesson.Children.length) return null;
+        const out = [];
+        for (const ch of lesson.Children) {{
+            if (!ch || isIntro(ch)) continue;
+            if (Array.isArray(ch.Children) && ch.Children.length) {{
+                for (const leaf of ch.Children) {{
+                    if (leaf && !isIntro(leaf)) out.push(leaf);
+                }}
+            }} else {{
+                out.push(ch);
+            }}
+        }}
+        return out.length ? out : null;
+    }};
+
+    // Verify every earlier part in the current section is complete (never inspect or jump to future sections)
+    for (const lIdx of sectionIndices) {{
+        if (lIdx === curLessonIdx) continue;
+        const lesson = lessons[lIdx];
+        const nested = collectTasks(lesson);
+        if (nested !== null) {{
+            if (nested.some(tk => !tk || !isDone(tk))) return 'incomplete';
+        }} else if (!isDone(lesson)) {{
+            return 'incomplete';
+        }}
+    }}
+    return 'ready';
+}})()"""
+
+HAS_INCOMPLETE_ASSESSMENT_TASKS_JS = ASSESSMENT_SUBMIT_STATE_JS
+
+IS_FINAL_ASSESSMENT_COMPLETE_JS = f"""(() => {{
+    if (document.querySelectorAll('ed-la-dropdownlist').length > 0) return false;
+    const href = String(window.location?.href || '');
+    const app = window.ng?.probe?.(document.querySelector('app'))?.componentInstance;
+    const onTestArea = Boolean(app?.isTestEnv) || /TestArea\\.html|\\/assessment/i.test(href) || Boolean(document.querySelector('#learning__tasksNav_submitTest'));
+    if (!onTestArea) return false;
+
+    const widgets = document.querySelectorAll(
+        '.prMCQ__qaSet, .prFITB__qaSet, .dnditem, .dndZone, .lessonMultipleAnswer, ' +
+        '.TTpanswerDiv, .openSpeech__btnStart, .speakingInteract, ed-la-mcq, ' +
+        '.prDDL__qaSet, .prOpenEnded__qaSet, .DDLOptions__selected, ' +
+        '.prOpenEnded__qaItemText, .writingEditFrame, textarea.writingTextarea, ' +
+        '.OpenEndedQ, .learning__selectTxt_st, span.st'
+    );
+    if (widgets.length > 0) return false;
+
+    const curTask = document.querySelector('.learning__taskNavPCCurrentTask')?.innerText?.trim() || '';
+    const intro = document.querySelector('.learning__taskNavPagerCounterIW--intro')?.innerText?.trim() || '';
+    if (curTask || intro) return false;
+
+    const isVisible = (el) => Boolean(el && (el.offsetWidth || el.offsetHeight || (el.getClientRects && el.getClientRects().length)));
+    if (isVisible(document.querySelector('#learning__tasksNav_submitTest, .learning__submitTestLink, .learning__tasksNav_testBtnW'))) {{
+        return false;
+    }}
+    const actionBtns = [...document.querySelectorAll('button, input[type=button], a.button, .btnStartTest')];
+    if (actionBtns.some(b => isVisible(b) && /start test|next section|continue to section/i.test(String(b.innerText || b.value || '').trim()))) {{
+        return false;
+    }}
+
+    const text = String(document.body?.innerText || '');
+    if (!/your\\s+(?:test\\s+)?score\\s+is/i.test(text)) return false;
+    if (/\\bsection\\s+\\d+\\b/i.test(text) && !/\\b(final test|midterm|placement|you have completed the)\\b/i.test(text)) {{
+        return false;
+    }}
+
+    const nav = app?.navigationService;
+    if (!app || !nav) return false;
+
+    {_SECTION_KEY_HELPER_JS}
+    const isIntro = (n) => /testintronode|^intro$/i.test(String(n?.Name || '').trim());
+    const isDone = (n) => Boolean(n?.IsDone) || Number(n?.Progress ?? 0) >= 0.999;
+    const hasExplicitFinalBanner = /\\byou\\s+have\\s+completed\\s+the\\b[\\s\\S]*\\b(test|assessment|exam)\\b/i.test(text)
+        || Boolean(app?.isTestCompleted || app?.testCompleted);
+
+    const nodeChildrenDone = (node) => {{
+        if (!Array.isArray(node?.Children) || !node.Children.length) return isDone(node);
+        const leaves = [];
+        for (const ch of node.Children) {{
+            if (!ch || isIntro(ch)) continue;
+            if (Array.isArray(ch.Children) && ch.Children.length) {{
+                for (const leaf of ch.Children) {{
+                    if (leaf && !isIntro(leaf)) leaves.push(leaf);
+                }}
+            }} else {{
+                leaves.push(ch);
+            }}
+        }}
+        return leaves.length ? leaves.every(isDone) : isDone(node);
+    }};
+
+    const verifyListComplete = (listObj) => {{
+        if (!Array.isArray(listObj?.Children) || listObj.Children.length === 0) return false;
+        const items = listObj.Children;
+        const nonIntroIndices = [];
+        for (let i = 0; i < items.length; i++) {{
+            if (!items[i]) return false;
+            if (!isIntro(items[i])) nonIntroIndices.push(i);
+        }}
+        if (!nonIntroIndices.length) return false;
+        if (nonIntroIndices.every(i => nodeChildrenDone(items[i]))) return true;
+        const curIdx = resolveIdx(listObj);
+        const lastIdx = nonIntroIndices[nonIntroIndices.length - 1];
+        if (curIdx !== lastIdx || !hasExplicitFinalBanner) return false;
+        return nonIntroIndices.slice(0, -1).every(i => nodeChildrenDone(items[i]));
+    }};
+
+    const uList = nav._unitsList;
+    const lList = nav._lessonsList;
+    if (uList !== undefined && uList !== null && !verifyListComplete(uList)) return false;
+    if (lList !== undefined && lList !== null && !verifyListComplete(lList)) return false;
+
+    const hasVerifiedList = (uList !== undefined && uList !== null) || (lList !== undefined && lList !== null);
+    if (!hasVerifiedList) return false;
+
+    const tList = nav._tasksList;
+    if (Array.isArray(tList?.Children) && tList.Children.length > 0) {{
+        const nonIntroTasks = tList.Children.filter(tk => tk && !isIntro(tk));
+        if (nonIntroTasks.slice(0, -1).some(tk => !isDone(tk))) return false;
+        if (!hasExplicitFinalBanner && nonIntroTasks.some(tk => !isDone(tk))) return false;
+    }}
+
+    return true;
+}})()"""
+
+_SOLVER_FAILURE_TOKENS = (
+    ": nodata",
+    ": no-items",
+    ": no-targets",
+    ": none",
+    ": no spans",
+    "EMPTY-MAP",
+    "EMPTY-ORDER",
+    "INVALID-INDICES",
+    "=FAIL",
+    "=noopt",
+    "=nf",
+    "=?",
+    "=nw",
+    "speak: blocked",
+)
+
+
+def is_solver_failure_result(result):
+    """True when solver output indicates a missing/failed answer rather than a registered selection."""
+    s = str(result or "").strip()
+    if not s or s.startswith("other:"):
+        return True
+    if s in ("mcq:", "multi:", "drag:", "cloze:", "lcloze:", "fitb:", "write:", "open: 0"):
+        return True
+    return any(tok in s for tok in _SOLVER_FAILURE_TOKENS)
+
+
+def select_target_tab(port=None):
+    """Select an Assessment Center (`TestArea.html`) tab when assessment mode is requested; otherwise use `edlib.tab()`."""
+    want_assessment = os.environ.get("ED_ASSESSMENT") == "1" or "--assessment" in sys.argv
+    if not want_assessment:
+        return edlib.tab()
+    if edlib.tab is not _ORIG_EDLIB_TAB:
+        t = edlib.tab()
+        if not is_test_area(t):
+            print("NO-ASSESSMENT-TAB — expected TestArea.html target")
+            sys.exit(6)
+        return t
+
+    p = PORT if port is None else port
+    tabs = json.load(edlib.driver.urllib.request.urlopen(f"http://127.0.0.1:{p}/json", timeout=5))
+    pages = [x for x in tabs if x.get("type") == "page"]
+    assessment_pages = [
+        x for x in pages
+        if re.search(r"testarea\.html|/assessment", x.get("url") or "", re.I)
+    ]
+    if assessment_pages:
+        chosen = assessment_pages[0]
+        tab = edlib.driver.Tab(chosen["webSocketDebuggerUrl"])
+        for method in ("Page.enable", "Runtime.enable", "Network.enable"):
+            tab.send(method)
+        return tab
+    print("NO-ASSESSMENT-TAB — open TestArea.html before running auto.py in assessment mode")
+    sys.exit(6)
+
+
+class GuardedTab:
+    """Recheck page identity within each JS evaluation before executing its expression."""
+
+    def __init__(self, tab, assessment_mode):
+        self.tab = tab
+        self.assessment_mode = bool(assessment_mode)
+
+    def js(self, expr, *, retry=True):
+        expected = "true" if self.assessment_mode else "false"
+        wrapped = f"""(() => {{
+          const assessment = {IS_TEST_AREA_JS};
+          if (assessment !== {expected} || (assessment && document.querySelectorAll('ed-la-dropdownlist').length > 0))
+            return {{__ed_guard_blocked__: true}};
+          return {{__ed_guard_value__: (({expr}) ?? null)}};
+        }})()"""
+        result = self.tab.js(wrapped) if retry else self.tab.js(wrapped, retry=False)
+        if not isinstance(result, dict) or result.get("__ed_guard_blocked__") or "__ed_guard_value__" not in result:
+            print("TAB-AUTHORIZATION-CHANGED — stopping without further actions")
+            sys.exit(6)
+        return result["__ed_guard_value__"]
+
+    def send(self, method, *args, **kwargs):
+        self.js("true")
+        return self.tab.send(method, *args, **kwargs)
+
+    def goto(self, url, wait=3.0):
+        self.send("Page.navigate", url=url)
+        time.sleep(wait)
+
+    def mouse(self, etype, x, y, button="none", buttons=0, clickCount=0):
+        return self.send("Input.dispatchMouseEvent", type=etype, x=x, y=y,
+                         button=button, buttons=buttons, clickCount=clickCount,
+                         pointerType="mouse")
+
+    def click_xy(self, x, y):
+        self.mouse("mouseMoved", x, y)
+        self.mouse("mousePressed", x, y, "left", 1, 1)
+        time.sleep(0.05)
+        self.mouse("mouseReleased", x, y, "left", 0, 1)
+
+    def drag_xy(self, x1, y1, x2, y2, steps=12, pause=0.06):
+        self.mouse("mouseMoved", x1, y1)
+        time.sleep(0.1)
+        self.mouse("mousePressed", x1, y1, "left", 1, 1)
+        time.sleep(0.1)
+        for i in range(1, steps + 1):
+            self.mouse("mouseMoved", x1 + (x2 - x1) * i / steps,
+                       y1 + (y2 - y1) * i / steps, "left", 1)
+            time.sleep(pause)
+        time.sleep(0.1)
+        self.mouse("mouseReleased", x2, y2, "left", 0, 1)
+        time.sleep(0.4)
+
+    def __getattr__(self, name):
+        return getattr(self.tab, name)
+
+
+def ensure_session(t, assessment_locked=False):
+    """Recognize live Assessment Center sessions so `login.ensure_login` never navigates away."""
+    if bool(t.js(IS_LIVE_ASSESSMENT_SESSION_JS)):
+        return True
+    if assessment_locked or is_test_area(t):
+        return False
+    return bool(login.ensure_login(t))
+
+
+def is_test_area(t):
+    """Identify assessment signals; mixed lesson dropdowns remain ambiguous, not lessons."""
+    return bool(t.js(IS_TEST_AREA_JS))
+
+
+def is_test_intro_screen(s):
+    """True when state indicates a TestArea section/part intro (`TestIntroNode` or `Intro`)."""
+    counter = str(s.get("counter") or "").strip().lower()
+    step = str(s.get("step") or "").strip().lower()
+    return counter == "intro" or "testintronode" in step
+
+
+def advance_next_part(t):
+    """Cross multi-part Assessment Center `_lessonsList` boundaries within the current section and verify."""
+    before = t.js(NAV_STATE_SIG_JS)
+    if not t.js(ADVANCE_NEXT_PART_JS):
+        return False
+    after = poll.wait_until(
+        lambda: t.js(NAV_STATE_SIG_JS),
+        lambda v: v != before,
+        timeout=2.0,
+        interval=0.15,
+        settle=0.1,
+    )
+    return after != before
+
+
+def advance_test_intro(t):
+    """Advance past a TestArea section/part intro and verify the state changed."""
+    if advance(t):
+        return True
+    before = t.js(NAV_STATE_SIG_JS)
+    if t.js(ADVANCE_TEST_INTRO_STEP_JS):
+        after = poll.wait_until(
+            lambda: t.js(NAV_STATE_SIG_JS),
+            lambda v: v != before,
+            timeout=2.0,
+            interval=0.15,
+            settle=0.1,
+        )
+        if after != before:
+            return True
+    return advance_next_part(t)
+
+
+def assessment_submit_state(t):
+    """Return Assessment Center submission readiness: not-assessment | unknown | next-part | incomplete | ready."""
+    state = t.js(ASSESSMENT_SUBMIT_STATE_JS)
+    return state if isinstance(state, str) and state else "unknown"
+
+
+def has_incomplete_assessment_tasks(t):
+    """True unless Assessment Center tasks in the current submission boundary are verified ready."""
+    state = assessment_submit_state(t)
+    if state == "not-assessment":
+        return False
+    return state != "ready"
+
+
+def has_score_text(body):
+    low = (body or "").lower()
+    return "your test score is" in low or "your score is" in low
+
+
+def is_final_assessment_complete(t, body=None):
+    """Verify final Assessment Center completion (rejecting section scores and question text)."""
+    txt = body if body is not None else (t.js("(() => document.body?.innerText || '')()") or "")
+    if not has_score_text(txt):
+        return False
+    low = txt.lower()
+    if re.search(r"\bsection\s+\d+\b", low) and not re.search(
+        r"\b(final test|midterm|placement|you have completed the)\b", low
+    ):
+        return False
+    return bool(t.js(IS_FINAL_ASSESSMENT_COMPLETE_JS))
+
+
+def extract_score_lines(body):
+    return [
+        ln.strip()
+        for ln in (body or "").splitlines()
+        if ln.strip() and ("%" in ln or "test score" in ln.lower() or "your score is" in ln.lower())
+    ][:2]
+
+
 def wait_text(t, needles, timeout=25):
     t0 = time.time()
     while time.time() - t0 < timeout:
@@ -288,14 +913,30 @@ def handle_branch(t, src):
     return "branch: " + opts[idx][:40]
 
 
+def require_action_mode(t, expected_assessment):
+    current = is_test_area(t)
+    if current != expected_assessment or (current and t.js("(() => document.querySelectorAll('ed-la-dropdownlist').length > 0)()")):
+        print("TAB-AUTHORIZATION-CHANGED — stopping without further actions")
+        sys.exit(6)
+
+
 def handle_test(t, src, unit_handler=None, lesson_name=""):
     """Answer a test question set, submit on the last one."""
+    test_area = is_test_area(t)
+    if test_area and not (os.environ.get("ED_ASSESSMENT") == "1" or "--assessment" in sys.argv):
+        print("UNREQUESTED-ASSESSMENT-TAB — stopping")
+        sys.exit(6)
+    if test_area and t.js("(() => document.querySelectorAll('ed-la-dropdownlist').length > 0)()"):
+        return "test-unanswered: completeness-unknown"
     # Listening tests score 40% if answered blind; transcribe the audio once per test.
     src = solver.attach_transcript(t, src, label="test", prefer_last_media=True)
+    expected_assessment = os.environ.get("ED_ASSESSMENT") == "1" or "--assessment" in sys.argv
     out = None
     if unit_handler:
+        require_action_mode(t, expected_assessment)
         out = unit_handler.on_task(t, {"type": "test", "src": src, "lesson": lesson_name})
     if out is None:
+        require_action_mode(t, expected_assessment)
         out = solver.do_task(t, src)
     # A speaking step can slip through as a test while the LMS keeps a hidden
     # test container (`.testResultTools`, `.learning__submitTestLink`) in the
@@ -306,35 +947,76 @@ def handle_test(t, src, unit_handler=None, lesson_name=""):
       return b ? String(b.className || 'speaking') : '';
     })()""")
     if str(out).startswith("other:") and speak_widget:
+        require_action_mode(t, expected_assessment)
         return handle_speaking(t, src)
-    # Require a checked answer in every MCQ set, including after retry.
+    # Require positive evidence of a registered answer and reject solver error/nodata outputs.
     def unanswered(result):
-        return result.startswith("other:") or bool(q(t, """return [...document.querySelectorAll('.prMCQ__qaSet')].some(e=>!e.querySelector('.prMCQ__answers:not(.hide) .layout__radio:checked, .prMCQ__answers--checked'))?1:0;"""))
+        return is_solver_failure_result(result) or bool(q(t, UNANSWERED_TEST_DOM_JS))
 
     if unanswered(out):
         time.sleep(1.5)
+        require_action_mode(t, expected_assessment)
         retry = solver.do_task(t, src)
         out = retry
         print("test retry", str(retry)[:60], flush=True)
     if unanswered(out):
-        return "test-unanswered: " + out
+        return "test-unanswered: " + str(out)
     total = st(t)["total"]
     counter = st(t)["counter"]
-    sub = q(t, "return document.querySelector('.learning__submitTestLink, .learning__tasksNav_testBtnW, a.learning__submitTestLink')?1:0;")
-    is_last = total and counter == total
-    if (sub and is_last) or is_last:
-        click(t, "a.learning__submitTestLink, .learning__submitTestLink, .learning__tasksNav_testBtnW")
-        t.js("(() => {const a=document.querySelector('.learning__submitTestLink'); if(a) angular.element(a).triggerHandler('click');})()")
-        t.js("""(() => {
-          const app = window.ng?.probe?.(document.querySelector('app'))?.componentInstance;
-          if (typeof app?.navigationService?.submitTest === 'function') {
-            try { app.navigationService.submitTest(); } catch(e) {}
-          }
-        })()""")
+    sub = q(t, "return document.querySelector('#learning__tasksNav_submitTest, .learning__submitTestLink, .learning__tasksNav_testBtnW, a.learning__submitTestLink')?1:0;")
+    is_last = bool(total and counter == total)
+    if is_last:
+        test_area = is_test_area(t)
+        if test_area:
+            gate = assessment_submit_state(t)
+            if gate == "next-part":
+                return out
+            if gate == "incomplete":
+                return "test-unanswered: incomplete-tasks"
+            if gate != "ready":
+                return "test-unanswered: completeness-unknown"
+        before_sig = t.js(NAV_STATE_SIG_JS) if test_area else None
+        require_action_mode(t, expected_assessment)
+        selector = "#learning__tasksNav_submitTest, a.learning__submitTestLink, .learning__submitTestLink, .learning__tasksNav_testBtnW"
+        if test_area:
+            # Never retry after an attempted click: it may already have submitted,
+            # even if the browser reports an error or the transition is delayed.
+            try:
+                clicked = click(t, selector, retry=False)
+            except Exception:
+                return "test-submit-unverified"
+            if clicked == 0:
+                require_action_mode(t, expected_assessment)
+                if assessment_submit_state(t) != "ready":
+                    return "test-submit-unverified"
+                try:
+                    fallback = t.js("""(() => {
+                      if (document.querySelector('#learning__tasksNav_submitTest, a.learning__submitTestLink, .learning__submitTestLink, .learning__tasksNav_testBtnW')) return 0;
+                      const app = window.ng?.probe?.(document.querySelector('app'))?.componentInstance;
+                      if (typeof app?.navigationService?.submitTest !== 'function') return 0;
+                      app.navigationService.submitTest();
+                      return 1;
+                    })()""", retry=False)
+                except Exception:
+                    return "test-submit-unverified"
+                if fallback != 1:
+                    return "test-submit-unverified"
+            elif clicked != 1:
+                return "test-submit-unverified"
+        else:
+            # Preserve existing course-lesson test submission behavior.
+            click(t, selector)
+            t.js("(() => {const a=document.querySelector('#learning__tasksNav_submitTest, .learning__submitTestLink'); if(a && window.angular) angular.element(a).triggerHandler('click');})()")
+            t.js("""(() => {
+              const app = window.ng?.probe?.(document.querySelector('app'))?.componentInstance;
+              if (typeof app?.navigationService?.submitTest === 'function') {
+                try { app.navigationService.submitTest(); } catch(e) {}
+              }
+            })()""")
         poll.wait_until(
             lambda: q(t, "return (document.querySelector('iframe#colorBoxIframe') || document.querySelector('#colorbox') || document.querySelector('.modal'))?1:0;"),
             lambda v: v == 1, timeout=8.0, interval=0.2)
-        confirm_res = t.js("""(() => {
+        confirm_js = """(() => {
           let b = [...document.querySelectorAll('iframe#colorBoxIframe')].flatMap(f => {
             try { return [...(f.contentDocument || f.contentWindow.document).querySelectorAll('input, button, a')]; } catch(e) { return []; }
           }).filter(e=>/ok|continue|submit|yes|confirm/i.test((e.value||e.innerText||'').trim()));
@@ -344,32 +1026,52 @@ def handle_test(t, src, unit_handler=None, lesson_name=""):
             .filter(e=>/ok|continue|submit|yes|confirm/i.test((e.value||e.innerText||'').trim()));
           if(b2.length) { b2[b2.length-1].click(); return 'colorbox-clicked'; }
           return 'none';
-        })()""")
+        })()"""
+        confirm_res = t.js(confirm_js)
         print(f"submit modal confirm result: {confirm_res}", flush=True)
         # Check if the review/score screen was triggered
         body = poll.wait_until(
-            lambda: t.js("(() => document.body.innerText.slice(0,500))()"),
-            lambda b: bool(b) and ("%" in b or "test score" in b.lower()), timeout=12.0, interval=0.3) or ""
-        score = [ln for ln in body.split("\n") if "%" in ln or "test score" in ln.lower()][:2]
-        # Propagate step completion directly to Angular navigation service
-        t.js("""(() => {
-          const comp = window.ng?.probe?.(document.querySelector('app'))?.componentInstance;
-          const nav = comp?.navigationService;
-          const cts = nav?.backNextService?.courseTreeService;
-          const dds = [...document.querySelectorAll('ed-la-dropdownlist')];
-          const ddComp = dds.length > 1 ? window.ng?.probe?.(dds[1])?.componentInstance : null;
-          const curStep = ddComp?.dropDownListObj?.SelectedNode || nav?._stepsList?.SelectedNode;
-          if (curStep?.NodeId && cts?.setProgressAsync) {
-            cts.setProgressAsync(curStep.NodeId);
-          }
-          if (curStep) {
-            curStep.Progress = 1;
-            curStep.IsDone = true;
-          }
-          if (typeof nav?.setProgress === 'function' && curStep?.NodeId) {
-            try { nav.setProgress(curStep.NodeId); } catch(e) {}
-          }
-        })()""")
+            lambda: t.js("(() => (document.body?.innerText || '').slice(0, 1500))()"),
+            lambda b: bool(b) and ("%" in b or "test score" in b.lower() or "your score is" in b.lower()),
+            timeout=12.0, interval=0.3) or ""
+        score = extract_score_lines(body)
+        if test_area:
+            time.sleep(1.0)
+            post_body = t.js("(() => document.body?.innerText || '')()") or body
+            if is_final_assessment_complete(t, post_body):
+                final_score = extract_score_lines(post_body) or score
+                return f"test-submit-final {final_score}"
+            after_sig = t.js(NAV_STATE_SIG_JS)
+            has_live_nav = bool(t.js("""(() => {
+              const nav = window.ng?.probe?.(document.querySelector('app'))?.componentInstance?.navigationService;
+              return Boolean(nav && ((Array.isArray(nav._lessonsList?.Children) && nav._lessonsList.Children.length) || (Array.isArray(nav._stepsList?.Children) && nav._stepsList.Children.length)));
+            })()"""))
+            has_reminder = bool(q(t, "return /unanswered|not answered|incomplete|please answer/i.test(document.body?.innerText || '') ? 1 : 0;"))
+            if has_live_nav and after_sig and before_sig and after_sig != before_sig and not has_reminder and not has_score_text(post_body):
+                return "test-submit-section"
+            return "test-submit-unverified"
+        # Propagate step completion ONLY for standard course lessons with a confirmed score
+        if score:
+            t.js("""(() => {
+              const comp = window.ng?.probe?.(document.querySelector('app'))?.componentInstance;
+              if (comp?.isTestEnv) return;
+              const dds = [...document.querySelectorAll('ed-la-dropdownlist')];
+              if (dds.length < 2) return;
+              const nav = comp?.navigationService;
+              const cts = nav?.backNextService?.courseTreeService;
+              const ddComp = window.ng?.probe?.(dds[1])?.componentInstance;
+              const curStep = ddComp?.dropDownListObj?.SelectedNode || nav?._stepsList?.SelectedNode;
+              if (curStep?.NodeId && cts?.setProgressAsync) {
+                cts.setProgressAsync(curStep.NodeId);
+              }
+              if (curStep) {
+                curStep.Progress = 1;
+                curStep.IsDone = true;
+              }
+              if (typeof nav?.setProgress === 'function' && curStep?.NodeId) {
+                try { nav.setProgress(curStep.NodeId); } catch(e) {}
+              }
+            })()""")
         time.sleep(2.0)
         return f"test-submit {score}"
     return out
@@ -430,6 +1132,7 @@ def require_lesson_complete(t, timeout=12.0, interval=1.0):
         # Attempt recovery via courseTreeService if stuck at last test step
         t.js("""(() => {
           const comp = window.ng?.probe?.(document.querySelector('app'))?.componentInstance;
+          if (comp?.isTestEnv) return;
           const cts = comp?.navigationService?.backNextService?.courseTreeService;
           const dds = [...document.querySelectorAll('ed-la-dropdownlist')];
           const ddComp = dds.length > 1 ? window.ng?.probe?.(dds[1])?.componentInstance : null;
@@ -453,8 +1156,13 @@ def require_lesson_complete(t, timeout=12.0, interval=1.0):
 
 
 def main(max_iter=120):
-    t = edlib.tab()
-    if not login.ensure_login(t):
+    t = select_target_tab()
+    assessment_mode = os.environ.get("ED_ASSESSMENT") == "1" or "--assessment" in sys.argv
+    if not assessment_mode and is_test_area(t):
+        print("UNREQUESTED-ASSESSMENT-TAB — request assessment mode explicitly; stopping")
+        sys.exit(6)
+    t = GuardedTab(t, assessment_mode)
+    if not ensure_session(t, assessment_locked=assessment_mode):
         print("LOGIN-FAIL")
         sys.exit(4)
     src = ""
@@ -471,11 +1179,25 @@ def main(max_iter=120):
     lesson_lock = ""
     target_step_jumped = False
     unit_handler = None
+    submitted_sections = set()
     for _ in range(max_iter):
         s = st(t)
+        cur_test_area = is_test_area(t)
+        if cur_test_area and not assessment_mode:
+            print("UNREQUESTED-ASSESSMENT-TAB — request assessment mode explicitly; stopping")
+            sys.exit(6)
+        elif not cur_test_area and assessment_mode:
+            print("ASSESSMENT-TAB-LOST — left TestArea.html; stopping without touching other views")
+            sys.exit(6)
+        if cur_test_area and t.js("(() => document.querySelectorAll('ed-la-dropdownlist').length > 0)()"):
+            print("ASSESSMENT-AMBIGUOUS-DROPDOWNS — stopping without lesson navigation")
+            sys.exit(6)
         if "Member Login" in (s.get("body") or ""):
+            if assessment_mode:
+                print("ASSESSMENT-SESSION-LOST — Member Login shown on assessment tab; stopping")
+                sys.exit(4)
             print("session dropped, relogging")
-            if not login.ensure_login(t):
+            if not ensure_session(t, assessment_locked=False):
                 print("LOGIN-FAIL")
                 sys.exit(4)
             unit_lock = lesson_lock = ""
@@ -484,7 +1206,7 @@ def main(max_iter=120):
 
         if not unit_lock:
             unit_lock = s.get("unit") or ""
-        elif s.get("unit") and s["unit"] != unit_lock:
+        elif s.get("unit") and s["unit"] != unit_lock and not cur_test_area:
             print("UNIT-CHANGED", unit_lock, "->", s["unit"])
             sys.exit(4)
         if not unit_handler and s.get("unit"):
@@ -647,16 +1369,33 @@ def main(max_iter=120):
 
 
         # test score / review screen (test already completed)
+        body_low = (s.get("body") or "").lower()
         if (
-            "your test score is" in s["body"].lower()
-            or ("review your answers" in s["body"].lower() and "next arrow" in s["body"].lower())
+            has_score_text(s.get("body"))
+            or ("review your answers" in body_low and "next arrow" in body_low)
         ):
-            print(f"-- test/course completed, advancing to finish lesson ({s.get('lesson')})")
-            nxt = solver.set_next_step(t)
-            time.sleep(1.0)
-            require_lesson_complete(t)
-            prev = None
-            continue
+            if cur_test_area:
+                if is_final_assessment_complete(t, s.get("body")):
+                    score = extract_score_lines(s.get("body"))
+                    print(f"Assessment complete: {' | '.join(score) or 'completed'}", flush=True)
+                    return
+                if not q(t, TEST_WIDGETS_JS):
+                    has_live_nav = bool(t.js("""(() => {
+                      const nav = window.ng?.probe?.(document.querySelector('app'))?.componentInstance?.navigationService;
+                      return Boolean(nav && ((Array.isArray(nav._unitsList?.Children) && nav._unitsList.Children.length) || (Array.isArray(nav._lessonsList?.Children) && nav._lessonsList.Children.length)));
+                    })()"""))
+                    if has_live_nav and advance(t):
+                        prev = None
+                        continue
+                    print("[AGENT-ACTION-REQUIRED] Assessment score screen lacks verified final completion state; stopping", file=sys.stderr)
+                    sys.exit(6)
+            else:
+                print(f"-- test/course completed, advancing to finish lesson ({s.get('lesson')})")
+                nxt = solver.set_next_step(t)
+                time.sleep(1.0)
+                require_lesson_complete(t)
+                prev = None
+                continue
 
 
         test_intro_active = t.js("""(() => {
@@ -689,6 +1428,18 @@ def main(max_iter=120):
         is_test = t.js(IS_TEST_JS)
         if q(t, "return document.querySelectorAll('a.chooseCaracterArrow').length ? 1 : 0;"):
             is_test = False
+
+        if is_test and cur_test_area and is_test_intro_screen(s) and not q(t, TEST_WIDGETS_JS):
+            intro_key = ("testarea_intro", s.get("lesson"), s.get("step"), s.get("counter"))
+            if next_intro_attempt(intro_tries, intro_key):
+                moved = advance_test_intro(t)
+                print(f"advanced past test intro ({s.get('step')}, moved={bool(moved)})", flush=True)
+                time.sleep(1.0)
+                if moved:
+                    prev = None
+                continue
+
+        pre_nav_sig = t.js(NAV_STATE_SIG_JS) if cur_test_area else None
 
         if is_test:
             poll.wait_until(
@@ -824,15 +1575,43 @@ def main(max_iter=120):
         if is_test and out.startswith("test-unanswered:"):
             continue
         if is_test and str(out).startswith("test-submit"):
+            if cur_test_area:
+                if str(out) == "test-submit-unverified":
+                    print("[AGENT-ACTION-REQUIRED] Assessment submission unverified; stopping without retrying submit", file=sys.stderr)
+                    sys.exit(6)
+                post_body = t.js("(() => document.body?.innerText || '')()") or ""
+                if str(out).startswith("test-submit-final") or is_final_assessment_complete(t, post_body):
+                    score = extract_score_lines(post_body) or extract_score_lines(str(out))
+                    print(f"Assessment complete: {' | '.join(score) or out}", flush=True)
+                    return
+                post_nav_sig = t.js(NAV_STATE_SIG_JS)
+                section_moved = str(out) == "test-submit-section" or bool(
+                    post_nav_sig and pre_nav_sig and post_nav_sig != pre_nav_sig
+                )
+                if not section_moved or sig in submitted_sections:
+                    print("[AGENT-ACTION-REQUIRED] Assessment section submit did not transition; stopping without retrying", file=sys.stderr)
+                    sys.exit(6)
+                submitted_sections.add(sig)
+                prev = None
+                continue
             require_lesson_complete(t)
             prev = None
             continue
 
         if not advance(t):
             if s.get("counter") and s.get("total") and s["counter"] == s["total"]:
-                solver.set_next_step(t)
+                nxt = solver.set_next_step(t)
                 time.sleep(2.0)
+                if cur_test_area and nxt in ("last step", "cannot advance step") and advance_next_part(t):
+                    print("-- advanced to next assessment part", flush=True)
+                    time.sleep(1.5)
+                    prev = None
+            elif cur_test_area and advance_next_part(t):
+                print("-- advanced to next assessment part", flush=True)
+                time.sleep(1.5)
+                prev = None
 
 
 if __name__ == "__main__":
-    main(int(sys.argv[1]) if len(sys.argv) > 1 else 120)
+    _pos_args = [a for a in sys.argv[1:] if not a.startswith("-")]
+    main(int(_pos_args[0]) if _pos_args else 120)

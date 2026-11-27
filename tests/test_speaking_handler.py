@@ -69,8 +69,11 @@ class TestClassificationTests(unittest.TestCase):
     def test_handle_test_redirects_speaking_widget(self):
         tab = Mock()
         tab.js.side_effect = [
+            False,                                   # standard lesson, not assessment
             "",                                      # audio/video query (no media)
+            False,                                   # revalidate before solver
             "openSpeech__btn openSpeech__btnStart",  # speak_widget detection
+            False,                                   # revalidate before speaking
         ]
         with patch.object(auto.solver, "dom_transcript", return_value=""), \
              patch.object(auto.solver, "do_task", return_value="other: text prompt"), \

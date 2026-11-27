@@ -172,7 +172,15 @@ class AskPoolTests(unittest.TestCase):
         self.assertEqual((result, err, sleeps), ("hi", None, [2]))
 
     def test_request_uses_curl_user_agent_and_15s_timeout(self):
-        _r, _e, calls, _s = self._ask([_Resp(_ok_body("hi"))], ["model-a"], key="k")
+        import importlib
+        saved = dict(config.__dict__)
+        try:
+            with patch.dict(os.environ, {"ED_SKIP_DOTENV": "1"}, clear=True):
+                importlib.reload(config)
+                _r, _e, calls, _s = self._ask([_Resp(_ok_body("hi"))], ["model-a"], key="k")
+        finally:
+            config.__dict__.clear()
+            config.__dict__.update(saved)
         req = calls[0]["req"]
         headers = {k.lower(): v for k, v in req.headers.items()}
         self.assertEqual(headers.get("user-agent"), "curl/8.4.0")

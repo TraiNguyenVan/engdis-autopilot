@@ -21,14 +21,15 @@ The courseware's scored assessment is the **Assessment Center exam** (midterm, f
 
 ### Assessment Center prompt
 
-This path is unverified in this repo: there is no Assessment Center fixture. Monitor the run and stop on a stall or an empty question; results are not guaranteed. The bootstrap enables a fake microphone, so it is not suitable for real speaking answers.
+This path is unverified against a live Assessment Center; the offline tests use synthetic fixtures, not a captured exam. Monitor the run and stop on a stall or an empty question; results are not guaranteed. The bootstrap enables a fake microphone, so it is not suitable for real speaking answers.
 
-> `/engdis-autopilot Help me with my Assessment Center <EXAM_TYPE>. If any necessary details are unclear or missing, ask me first. Before launch, check the profile and port are not already in use; if they are, stop and tell me. Start visible local Chrome with python3 bootstrap_browser.py --headed --port 9225 --profile ~/.ed-profile and keep it running. Verify the window and CDP connection; if Chrome cannot start, stop and tell me. If the exam requires a real microphone, stop and tell me before starting the attempt: the bootstrap uses a fake audio device. Help me log in if needed, then wait for me to open the exam myself and authorize the attempt. Do not use cover.py, Docker, headless mode, or --unattended. Attach to the open exam tab with auto.py; monitor every question and verify an answer is registered before advancing. If a question is empty, the counter stalls, a reminder appears, or the page is ambiguous, stop without submitting and tell me what happened. Submit only after every question is visibly answered, report the score shown, then stop.`
+> `/engdis-autopilot Help me with my Assessment Center <EXAM_TYPE>. If any necessary details are unclear or missing, ask me first. Before launch, check the profile and port are not already in use; if they are, stop and tell me. Start visible local Chrome with python3 bootstrap_browser.py --headed --port 9225 --profile ~/.ed-profile and keep it running. Verify the window and CDP connection; if Chrome cannot start, stop and tell me. If the exam requires a real microphone, stop and tell me before starting the attempt: the bootstrap uses a fake audio device. Help me log in if needed, then wait for me to open the exam myself and authorize the attempt. Do not use cover.py, Docker, headless mode, or --unattended. Attach to the open exam tab with python3 auto.py --assessment; monitor every question and verify an answer is registered before advancing. If a question is empty, the counter stalls, a reminder appears, or the page is ambiguous, stop without submitting and tell me what happened. Submit only after every question is visibly answered, report the score shown, then stop.`
 
 ### Assessment Center boundaries
 
 - The Assessment Center is separate from the unit/lesson tree. `cover.py` cannot open it.
-- This repo has no Assessment Center fixture or verified run. Unit lesson tests passing says nothing about Assessment Center behavior.
+- Offline synthetic fixtures do not establish live Assessment Center behavior. Unit lesson tests passing says nothing about Assessment Center behavior.
+- Assessment mode must be explicitly requested with `python3 auto.py --assessment` (or `ED_ASSESSMENT=1`). If assessment and lesson dropdown signals coexist, the runner stops rather than navigating or submitting.
 - Keep the browser visible, monitor the run, and stop on stalls or ambiguous questions. Explicit authorization is required for the attempt.
 - Do not include private score anecdotes or percentages in the public README or PR text.
 
@@ -191,6 +192,7 @@ flowchart TD
 
 - **Docker-Enforced CDP Automation**: Direct DOM instrumentation, interaction simulation, and navigation over Chrome DevTools Protocol inside isolated containers.
 - **Multimodal LLM Solvers**: Solves text, multiple-choice, fill-in-the-blank, and drag-and-drop tasks using OpenAI-compatible endpoints (`OPENAI_MODEL`).
+- **LLM timeout and DNS limitation**: `ED_LLM_TIMEOUT` sets the per-attempt deadline in seconds (default 15). A request can return on timeout while its daemon fetch worker is still blocked in the system DNS resolver, which Python cannot cancel by closing the socket. Repeated stalled lookups can accumulate workers until DNS returns or the process exits; this is not a bounded DNS cleanup guarantee. Ordinary socket and response timeouts still trigger failover/retries.
 - **Unified Audio Transcription**: Transcribes listening exercises via base64 audio chat completions—no separate Whisper service needed.
 - **Low-RAM Containment**: Strict container limits (1280 MB RAM, 256 MB SHM) and Chromium heap capping for low-spec hosts.
 - **Dual Execution Modes**: Autonomous Agent Yield mode (`rc=6` on stalls) for interactive agent pairing, plus Unattended mode (`--unattended` / `ED_UNATTENDED=1`) for headless non-blocking runs.
