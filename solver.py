@@ -1517,49 +1517,652 @@ def solve_errorfix(t, src=""):
             f"done={state.get('done')}")
 
 
+_DDL_CARETS = "\u25be\u25bc\u25b4\u25b2\u2304\u2303\u2228\u2227"
+
+
+def _norm_ddl(text, strip_punct=False):
+    s = str(text or "")
+    for a, b in (("\u2019", "'"), ("\u2018", "'"), ("\u201c", '"'), ("\u201d", '"'),
+                 ("\u2013", "-"), ("\u2014", "-"), ("\u00a0", " ")):
+        s = s.replace(a, b)
+    if strip_punct:
+        s = "".join(ch if ch.isalnum() else " " for ch in s)
+    return " ".join(s.split()).lower()
+
+
+def _norm_ddl_selected(text):
+    s = str(text or "")
+    for ch in _DDL_CARETS:
+        s = s.replace(ch, " ")
+    return _norm_ddl(s)
+
+
+def _strip_ddl_prefix(text):
+    s = str(text or "").strip().strip('"\'`')
+    if s.startswith(("- ", "\u2022 ", "* ")):
+        return s[2:].strip().strip('"\'`')
+    i = 1 if s.startswith("(") else 0
+    j = i
+    while j < len(s) and s[j].isdigit():
+        j += 1
+    if j > i and j < len(s) and s[j] in ".)_:-" and s[j + 1:j + 2].isspace():
+        return s[j + 2:].strip().strip('"\'`')
+    return s
+
+
+def _match_ddl_option(want, options):
+    raw_want = str(want or "").strip()
+    if not raw_want or not options:
+        return None
+    valid = []
+    for idx, opt in enumerate(options):
+        if isinstance(opt, dict):
+            if opt.get("placeholder"):
+                continue
+            txt = str(opt.get("text") or "").strip()
+        else:
+            txt = str(opt or "").strip()
+        if txt:
+            valid.append((idx, txt))
+    if not valid:
+        return None
+
+    for candidate in dict.fromkeys((raw_want, _strip_ddl_prefix(raw_want))):
+        if not candidate:
+            continue
+        for idx, opt in valid:
+            if opt == candidate:
+                return idx
+        w_norm = _norm_ddl(candidate)
+        if w_norm:
+            for idx, opt in valid:
+                if _norm_ddl(opt) == w_norm:
+                    return idx
+        w_alnum = _norm_ddl(candidate, strip_punct=True)
+        if w_alnum:
+            for idx, opt in valid:
+                if _norm_ddl(opt, strip_punct=True) == w_alnum:
+                    return idx
+
+    for strip_p in (False, True):
+        w = _norm_ddl(_strip_ddl_prefix(raw_want), strip_punct=strip_p)
+        if not w:
+            continue
+        scored = []
+        for idx, opt in valid:
+            o = _norm_ddl(opt, strip_punct=strip_p)
+            if not o:
+                continue
+            padded_o, padded_w = f" {o} ", f" {w} "
+            if padded_w in padded_o:
+                scored.append((4, len(w), -len(o), -idx, idx))
+            elif padded_o in padded_w:
+                scored.append((3, len(o), 0, -idx, idx))
+        if scored:
+            return max(scored)[-1]
+    return None
+
+
+def _match_ddl_exact(target, options):
+    tgt = _norm_ddl_selected(target)
+    if not tgt or not options:
+        return None
+    for idx, opt in enumerate(options):
+        if isinstance(opt, dict):
+            if opt.get("placeholder"):
+                continue
+            txt = str(opt.get("text") or "").strip()
+        else:
+            txt = str(opt or "").strip()
+        if txt and _norm_ddl_selected(txt) == tgt:
+            return idx
+    return None
+
+
+def _ddl_selected_ok(selected_text, target_text, is_placeholder=False):
+    if is_placeholder:
+        return False
+    sel = _norm_ddl_selected(selected_text)
+    tgt = _norm_ddl_selected(target_text)
+    if not sel or not tgt:
+        return False
+    return sel == tgt
+
+
+_FITB_DOM_JS = r"""
+  const CONTAINER_SEL = '.DDLOptionsW, .prFITB__DDLOptionsW, .prDDL__DDLOptionsW, .prFITB__qaItem, .prDDL__qaItem, .fitb-ddl';
+  const OPT_SEL = '.DDLOptions__listItem, .DDLOptions__list li, .DDLOptions__option';
+  const hasAttr = (el, name) => !!(el && el.hasAttribute && el.hasAttribute(name));
+  const getAttr = (el, name) => (el && el.getAttribute) ? el.getAttribute(name) : null;
+  const getOptText = (el) => ((el && (el.innerText || el.textContent)) || '').replace(/\s+/g, ' ').trim();
+  const isOptionPlaceholder = (el) => {
+    if (!el) return true;
+    if (el.disabled === true || hasAttr(el, 'disabled')) return true;
+    if (String(getAttr(el, 'aria-disabled') || '').toLowerCase() === 'true') return true;
+    if (hasAttr(el, 'data-placeholder') && String(getAttr(el, 'data-placeholder') || '').toLowerCase() !== 'false') return true;
+    const role = String(getAttr(el, 'role') || '').toLowerCase();
+    if (role === 'presentation' || role === 'separator') return true;
+    const cls = String(el.className || '');
+    if (/(?:^|[\s_-])(placeholder|disabled)(?:$|[\s_-])/i.test(cls)) return true;
+    if (el.querySelector && el.querySelector('[disabled], [aria-disabled="true"], [data-placeholder]:not([data-placeholder="false"]), [class*="placeholder"]')) {
+      return true;
+    }
+    return false;
+  };
+  const isVisible = (el) => {
+    if (!el) return false;
+    const hasLayout = !!(typeof document !== 'undefined' && document.body && document.body.getBoundingClientRect &&
+      (document.body.getBoundingClientRect().width > 0 || document.body.getBoundingClientRect().height > 0));
+    let cur = el;
+    while (cur && cur.nodeType === 1) {
+      if (cur.hidden || hasAttr(cur, 'hidden')) return false;
+      const cls = cur.classList;
+      if (cls && (cls.contains('hide') || cls.contains('ng-hide') || cls.contains('hidden') || cls.contains('DDLOptions__list--closed'))) return false;
+      const st = (typeof window !== 'undefined' && window.getComputedStyle) ? window.getComputedStyle(cur) : cur.style;
+      if (st && (st.display === 'none' || st.visibility === 'hidden' || st.opacity === '0')) return false;
+      if (hasLayout && st && st.overflow === 'hidden' && cur.getBoundingClientRect) {
+        const cr = cur.getBoundingClientRect();
+        if (cr.width === 0 || cr.height === 0) return false;
+      }
+      cur = cur.parentElement;
+    }
+    if (hasLayout && el.getBoundingClientRect) {
+      const r = el.getBoundingClientRect();
+      if (r.width === 0 || r.height === 0) return false;
+    }
+    return true;
+  };
+  const getTriggers = () => {
+    const root = document.querySelector('.learning__angPracticeW, ed-la-practicearea, #pmContainer') || document;
+    let sels = [...root.querySelectorAll('.DDLOptions__selected')];
+    if (!sels.length) sels = [...document.querySelectorAll('.DDLOptions__selected')];
+    if (!sels.length) {
+      sels = [...document.querySelectorAll(CONTAINER_SEL)]
+        .map(w => w.querySelector('.DDLOptions__selected'))
+        .filter(Boolean);
+    }
+    const vis = sels.filter(isVisible);
+    return vis.length ? vis : sels;
+  };
+  const getTrigger = (idx) => getTriggers()[idx] || null;
+  const getContainers = (s) => {
+    const out = [];
+    let cur = s ? s.parentElement : null;
+    while (cur && cur !== document.body && cur !== document.documentElement) {
+      if (cur.matches && cur.matches(CONTAINER_SEL) && cur.querySelectorAll('.DDLOptions__selected').length <= 1) {
+        out.push(cur);
+      }
+      cur = cur.parentElement;
+    }
+    return out;
+  };
+  const getPortalOwner = (el) => {
+    const allTriggers = getTriggers();
+    if (!allTriggers.length) return null;
+    // An ARIA active descendant identifies a list even when that list has no
+    // id. Require one unique option id within one recognized menu and collect
+    // all claims together, so conflicting references remain ambiguous.
+    const MENU_SEL = '.DDLOptions__list, [role="listbox"]';
+    const menu = el.closest && el.closest(MENU_SEL);
+    const menuOptions = menu ? [...menu.querySelectorAll(OPT_SEL)]
+      .filter(option => option.closest && option.closest(MENU_SEL) === menu) : [];
+    const idCounts = new Map();
+    for (const item of document.querySelectorAll('[id]')) {
+      const id = String(item.id || '');
+      if (id) idCounts.set(id, (idCounts.get(id) || 0) + 1);
+    }
+    const broadPortalIds = new Set();
+    const broadLabelledBy = new Set();
+    let anc = el;
+    const portalIds = new Set();
+    const labelledBy = new Set();
+    while (anc && anc !== document.body && anc !== document.documentElement) {
+      // A link to an overlay containing multiple independent lists does not
+      // establish which one belongs to the trigger. Do not promote that broad
+      // relation to every child; a specific active-descendant may still do so.
+      const groups = new Set([...anc.querySelectorAll(OPT_SEL)].map(option => {
+        const group = option.closest && option.closest(MENU_SEL);
+        return group && anc.contains(group) ? group : option.parentElement;
+      }));
+      const unambiguous = groups.size <= 1;
+      if (anc.id && idCounts.get(String(anc.id)) === 1)
+        (unambiguous ? portalIds : broadPortalIds).add(String(anc.id));
+      for (const attr of ['aria-labelledby', 'data-trigger', 'data-for', 'data-owner', 'data-ddl-for']) {
+        const v = getAttr(anc, attr);
+        if (v) String(v).split(/\s+/).filter(Boolean).forEach(x =>
+          (unambiguous ? labelledBy : broadLabelledBy).add(x.replace(/^#/, '')));
+      }
+      anc = anc.parentElement;
+    }
+    const owners = new Set();
+    const broadOwners = new Set();
+    for (const trig of allTriggers) {
+      const scopes = [trig, ...getContainers(trig)];
+      for (const sc of scopes) {
+        const active = getAttr(sc, 'aria-activedescendant');
+        if (active && idCounts.get(String(active)) === 1 &&
+            menuOptions.some(option => String(option.id || '') === String(active))) owners.add(trig);
+        if (sc && sc.id && idCounts.get(String(sc.id)) === 1) {
+          if (labelledBy.has(String(sc.id))) owners.add(trig);
+          if (broadLabelledBy.has(String(sc.id))) broadOwners.add(trig);
+        }
+        for (const attr of ['aria-controls', 'aria-owns', 'data-target', 'data-dropdown', 'data-menu', 'data-portal']) {
+          const raw = getAttr(sc, attr);
+          if (!raw) continue;
+          for (const tok of String(raw).split(/\s+/).filter(Boolean)) {
+            const id = tok.replace(/^#/, '');
+            if (portalIds.has(id)) owners.add(trig);
+            if (broadPortalIds.has(id)) broadOwners.add(trig);
+          }
+        }
+      }
+    }
+    if (owners.size !== 1) return null;
+    const owner = [...owners][0];
+    return [...broadOwners].every(trig => trig === owner) ? owner : null;
+  };
+  const dedupOptions = (nodes) => {
+    const arr = [...nodes];
+    return arr.filter(el => !arr.some(other => other !== el && el.contains && el.contains(other)));
+  };
+  const selectableOptions = (nodes) => dedupOptions(nodes).filter(el => !isOptionPlaceholder(el) && getOptText(el) !== '');
+  const getScopedOptions = (s) => {
+    const containers = getContainers(s);
+    for (const c of containers) {
+      const raw = selectableOptions(c.querySelectorAll(OPT_SEL));
+      if (!raw.length) continue;
+      const vis = raw.filter(isVisible);
+      if (vis.length) return {items: vis, scope: 'container'};
+    }
+    // A newly visible unlinked menu may be a remounted stale portal. Timing,
+    // geometry, and matching text do not establish ownership, so fail closed.
+    const linkedVis = [];
+    for (const el of selectableOptions(document.querySelectorAll(OPT_SEL))) {
+      if (!isVisible(el)) continue;
+      let ownedByOtherContainer = false;
+      let anc = el.parentElement;
+      while (anc && anc !== document.body && anc !== document.documentElement) {
+        if (anc.matches && anc.matches(CONTAINER_SEL)) {
+          const ownerSels = anc.querySelectorAll('.DDLOptions__selected');
+          if (ownerSels.length === 1 && ownerSels[0] !== s) {
+            ownedByOtherContainer = true;
+            break;
+          }
+        }
+        anc = anc.parentElement;
+      }
+      if (ownedByOtherContainer) continue;
+      const explicitOwner = getPortalOwner(el);
+      if (explicitOwner === s) linkedVis.push(el);
+    }
+    if (linkedVis.length) {
+      // Distinct menus independently linked to one trigger conflict: never let
+      // their identical option text turn an ambiguous lookup into a click.
+      const menuSel = '.DDLOptions__list, [role="listbox"]';
+      // Direct references to distinct loose option nodes are distinct targets,
+      // even when those nodes happen to share an unlabelled parent.
+      const directIds = new Set(linkedVis.filter(el => el.id).map(el => String(el.id)));
+      const directTargets = new Set();
+      for (const sc of getContainers(s).concat([s])) {
+        for (const attr of ['aria-controls', 'aria-owns', 'data-target', 'data-dropdown', 'data-menu', 'data-portal']) {
+          String(getAttr(sc, attr) || '').split(/\s+/).forEach(tok => {
+            const id = tok.replace(/^#/, '');
+            if (directIds.has(id)) directTargets.add(id);
+          });
+        }
+      }
+      if (directTargets.size > 1) return {items: [], scope: 'none'};
+      const groups = new Set(linkedVis.map(el =>
+        (el.closest && el.closest(menuSel)) || el.parentElement || null));
+      if (!groups.has(null) && !groups.has(document.body) && !groups.has(document.documentElement) && groups.size === 1)
+        return {items: linkedVis, scope: 'portal-linked'};
+      return {items: [], scope: 'none'};
+    }
+    for (const c of containers) {
+      const raw = selectableOptions(c.querySelectorAll(OPT_SEL));
+      if (raw.length) return {items: raw, scope: 'container-hidden'};
+    }
+    return {items: [], scope: 'none'};
+  };
+  const getSelectedText = (s) => {
+    if (!s) return '';
+    if (s.cloneNode) {
+      const clone = s.cloneNode(true);
+      if (clone.querySelectorAll) {
+        clone.querySelectorAll(OPT_SEL + ', .DDLOptions__list').forEach(e => e.remove());
+      }
+      return ((clone.innerText || clone.textContent) || '').replace(/\s+/g, ' ').trim();
+    }
+    return ((s.innerText || s.textContent) || '').replace(/\s+/g, ' ').trim();
+  };
+  const isSelectedPlaceholder = (s) => {
+    if (!s || !getSelectedText(s)) return true;
+    if (hasAttr(s, 'data-placeholder') && String(getAttr(s, 'data-placeholder') || '').toLowerCase() !== 'false') return true;
+    if (String(getAttr(s, 'aria-placeholder') || '') && getAttr(s, 'data-selected') === 'false') return true;
+    const cls = String(s.className || '');
+    if (/(?:^|[\s_-])(placeholder|unselected)(?:$|[\s_-])/i.test(cls)) return true;
+    if (s.cloneNode) {
+      const clone = s.cloneNode(true);
+      if (clone.querySelectorAll) {
+        clone.querySelectorAll(OPT_SEL + ', .DDLOptions__list').forEach(e => e.remove());
+        if (clone.querySelector && clone.querySelector('[data-placeholder]:not([data-placeholder="false"]), [class*="placeholder"], [class*="unselected"]')) {
+          return true;
+        }
+      }
+    }
+    return false;
+  };
+  const fireMouse = (el) => {
+    if (!el || typeof el.dispatchEvent !== 'function') return;
+    for (const type of ['mousedown', 'mouseup']) {
+      try {
+        const ev = typeof MouseEvent === 'function'
+          ? new MouseEvent(type, {bubbles: true, cancelable: true})
+          : {type: type, bubbles: true};
+        el.dispatchEvent(ev);
+      } catch (e) {}
+    }
+  };
+  const closeOtherMenus = (s, forceClose) => {
+    const others = getTriggers().filter(x => x !== s);
+    const hasOpenOther = forceClose || others.some(o =>
+      getContainers(o).some(c => selectableOptions(c.querySelectorAll(OPT_SEL)).some(isVisible))
+    );
+    if (!hasOpenOther) return;
+    if (document.body && typeof document.body.click === 'function') {
+      try { document.body.click(); } catch (e) {}
+    }
+    for (const o of others) {
+      const stillOpen = getContainers(o).some(c => selectableOptions(c.querySelectorAll(OPT_SEL)).some(isVisible));
+      if (stillOpen && typeof o.click === 'function') {
+        try { o.click(); } catch (e) {}
+      }
+    }
+  };
+"""
+
+
+def _open_and_read_ddl(t, idx, attempt=0, force_close=False):
+    open_res = jso(t, _FITB_DOM_JS + f"""
+      const s = getTrigger({idx});
+      if (!s) return {{status: 'nf'}};
+      closeOtherMenus(s, {'true' if force_close else 'false'});
+      if (typeof s.scrollIntoView === 'function') {{
+        s.scrollIntoView({{block: 'center', inline: 'nearest'}});
+      }}
+      const cur = getScopedOptions(s);
+      if ({attempt} === 0 || {'true' if force_close else 'false'} || cur.scope === 'none' || cur.scope === 'container-hidden') {{
+        if ({attempt} > 0) fireMouse(s);
+        s.click();
+      }}
+      return {{status: 'ok', selected: getSelectedText(s), selectedPlaceholder: isSelectedPlaceholder(s)}};
+    """) or {}
+    if open_res.get("status") == "nf":
+        return {"status": "nf", "options": [], "scope": "none", "selected": "", "selectedPlaceholder": True}
+    time.sleep(0.3)
+    opts_res = jso(t, _FITB_DOM_JS + f"""
+      const s = getTrigger({idx});
+      if (!s) return {{status: 'nf', options: [], scope: 'none', selected: '', selectedPlaceholder: true}};
+      const res = getScopedOptions(s);
+      return {{
+        status: 'ok',
+        scope: res.scope,
+        selected: getSelectedText(s),
+        selectedPlaceholder: isSelectedPlaceholder(s),
+        options: res.items.map(getOptText)
+      }};
+    """) or {}
+    return opts_res
+
+
 def solve_fitb(t, src=""):
     """Sentence with numbered blanks, each a dropdown of options."""
-    data = jso(t, """
-      const el=document.querySelector('.learning__angPracticeW ng-component');
-      if(!el) return null; const c=ng.probe(el).componentInstance;
-      const q=(c.practiceData&&c.practiceData.questions&&c.practiceData.questions[0]);
-      if(!q) return null;
-      return {text:q.text, lists:(q.answerLists||[]).map(l=>(l.answers||[]).map(a=>a.txt))};
+    data = jso(t, _FITB_DOM_JS + r"""
+      const triggers = getTriggers();
+      const domCount = triggers.length;
+      const comps = [...document.querySelectorAll('.learning__angPracticeW ng-component, ed-la-practicearea ng-component')];
+      let text = '';
+      let lists = [];
+      if (comps.length && typeof ng !== 'undefined' && ng && ng.probe) {
+        const qs = comps.flatMap(el => {
+          const probe = ng.probe(el);
+          const c = probe && probe.componentInstance;
+          const q = c && c.practiceData && c.practiceData.questions;
+          return q && q.length ? [...q] : [];
+        });
+        if (qs.length) {
+          text = qs.length === 1
+            ? (qs[0].text || '')
+            : qs.map(q => (q && q.text) || '').filter(Boolean).join('\n');
+          lists = qs.flatMap(q => ((q && q.answerLists) || []).map(l => ((l && l.answers) || []).map(a => a.txt)));
+        }
+      }
+      if (!lists.length && !domCount) return null;
+      const domLists = triggers.map(s => {
+        for (const c of getContainers(s)) {
+          const opts = selectableOptions(c.querySelectorAll(OPT_SEL)).map(getOptText);
+          if (opts.length) return opts;
+        }
+        return [];
+      });
+      let domText = '';
+      if (!text || domCount > lists.length) {
+        const area = document.querySelector('.learning__angPracticeW, ed-la-practicearea, #pmContainer');
+        if (area && area.cloneNode) {
+          const clone = area.cloneNode(true);
+          if (clone.querySelectorAll) {
+            clone.querySelectorAll(OPT_SEL + ', .DDLOptions__list').forEach(e => e.remove());
+            [...clone.querySelectorAll('.DDLOptions__selected')].forEach((el, idx) => {
+              el.textContent = ' [[' + (idx + 1) + ']] ';
+            });
+          }
+          domText = ((clone.innerText || clone.textContent) || '').replace(/\s+/g, ' ').trim().slice(0, 2500);
+        }
+      }
+      return {text: text || domText, domText: domText, lists: lists, domCount: domCount, domLists: domLists};
     """)
     if not data:
-        return "fitb: nodata"
-    lines = "\n".join(f"{i+1}. {o}" for i, o in
-                      [(i, " | ".join(opts)) for i, opts in enumerate(data["lists"])])
-    prompt = ("Sentence with blanks (numbered):\n" + data["text"] +
+        return "other: fitb: nodata"
+    pd_lists = list(data.get("lists") or [])
+    dom_count = data.get("domCount")
+    if not isinstance(dom_count, int):
+        cnt = jso(t, _FITB_DOM_JS + "return getTriggers().length;")
+        dom_count = cnt if isinstance(cnt, int) else len(pd_lists)
+    dom_lists = list(data.get("domLists") or [])
+    total_blanks = max(len(pd_lists), dom_count)
+    if total_blanks == 0:
+        return "other: fitb: nodata"
+
+    all_lists = []
+    has_pd = []
+    for k in range(total_blanks):
+        if k < len(pd_lists):
+            all_lists.append(list(pd_lists[k] or []))
+            has_pd.append(True)
+        else:
+            extra = list(dom_lists[k]) if k < len(dom_lists) and dom_lists[k] else []
+            if not extra:
+                probed = _open_and_read_ddl(t, k, attempt=0, force_close=True)
+                extra = list(probed.get("options") or [])
+            all_lists.append(extra)
+            has_pd.append(False)
+
+    prompt_text = (
+        data.get("domText")
+        if (dom_count > len(pd_lists) and data.get("domText"))
+        else (data.get("text") or data.get("domText") or "")
+    )
+    lines = "\n".join(f"{i+1}. {' | '.join(opts)}" for i, opts in enumerate(all_lists))
+    ctx = f"SOURCE MATERIAL:\n{src}\n\n" if src and str(src).strip() else ""
+    prompt = (ctx + "Sentence with blanks (numbered):\n" + prompt_text +
               "\n\nOptions per blank:\n" + lines +
               '\n\nPick the best option for each blank. Reply ONLY JSON:'
               ' {"1": "<exact option text>", "2": "..."}')
-    picks = ask_json(prompt, max_tokens=300) or {}
+    picks = ask_json(prompt, max_tokens=600) or {}
     out = []
-    for i, opts in enumerate(data["lists"]):
+    verified_targets = {}
+    for i, opts in enumerate(all_lists):
         want = picks.get(str(i + 1)) or picks.get(i + 1) or ""
-        if not want:
+        if not str(want).strip():
             out.append(f"{i}=?")
             continue
-        sel = jso(t, f"""
-          const w=document.querySelectorAll('.prFITB__DDLOptionsW')[{i}];
-          if(!w) return 0; const s=w.querySelector('.DDLOptions__selected');
-          if(s) s.click(); return 1;
-        """)
-        time.sleep(0.4)
-        st = jso(t, f"""
-          const w=document.querySelectorAll('.prFITB__DDLOptionsW')[{i}];
-          if(!w) return 'nf'; const W={json.dumps(str(want).lower())};
-          const items=[...w.querySelectorAll('.DDLOptions__listItem')];
-          const pick=items.find(x=>(x.innerText||'').trim()=== {json.dumps(str(want))})
-            || items.find(x=>(x.innerText||'').trim().toLowerCase()===W)
-            || items.find(x=>(x.innerText||'').toLowerCase().includes(W))
-            || items.find(x=>W.includes((x.innerText||'').trim().toLowerCase()));
-          if(!pick) return 'noopt'; pick.click(); return 'ok';
-        """)
-        time.sleep(0.3)
+        locked_target = None
+        if has_pd[i]:
+            if not opts:
+                out.append(f"{i}=noopt")
+                continue
+            exp_idx = _match_ddl_option(want, opts)
+            if exp_idx is None:
+                out.append(f"{i}=noopt")
+                continue
+            locked_target = opts[exp_idx]
+        elif opts:
+            exp_idx = _match_ddl_option(want, opts)
+            if exp_idx is not None:
+                locked_target = opts[exp_idx]
+
+        st = "noopt"
+        force_close = False
+        for attempt in range(3):
+            opts_res = _open_and_read_ddl(t, i, attempt=attempt, force_close=force_close)
+            force_close = False
+            if opts_res.get("status") == "nf":
+                st = "nf"
+                break
+            dom_opts = opts_res.get("options") or []
+            scope = opts_res.get("scope") or "none"
+            if scope in ("document", "portal-linked") and opts:
+                exp_norms = {_norm_ddl(o, strip_punct=True) for o in opts if _norm_ddl(o, strip_punct=True)}
+                dom_norms = {_norm_ddl(o, strip_punct=True) for o in dom_opts if _norm_ddl(o, strip_punct=True)}
+                if exp_norms and dom_norms != exp_norms:
+                    force_close = True
+                    st = "noopt"
+                    continue
+            if locked_target is not None:
+                match_idx = _match_ddl_exact(locked_target, dom_opts)
+            else:
+                match_idx = _match_ddl_option(want, dom_opts)
+                if match_idx is not None:
+                    locked_target = dom_opts[match_idx]
+            if match_idx is None:
+                force_close = True
+                st = "noopt"
+                continue
+            chosen_text = dom_opts[match_idx]
+            pick_res = jso(t, _FITB_DOM_JS + f"""
+              const s = getTrigger({i});
+              if (!s) return {{clicked: 0, selected: '', selectedPlaceholder: true}};
+              const allTrigs = getTriggers();
+              const otherBefore = allTrigs.map(tEl => tEl === s ? null : getSelectedText(tEl));
+              const selBefore = getSelectedText(s);
+              const selPhBefore = isSelectedPlaceholder(s);
+              const res = getScopedOptions(s);
+              const wantText = {json.dumps(chosen_text)};
+              const candidate = res.items[{match_idx}];
+              const pick = (candidate && getOptText(candidate) === wantText)
+                ? candidate
+                : (res.items.find(el => getOptText(el) === wantText) || null);
+              if (!pick) return {{clicked: 0, selected: selBefore, selectedPlaceholder: selPhBefore}};
+              if (typeof pick.scrollIntoView === 'function') {{
+                pick.scrollIntoView({{block: 'nearest', inline: 'nearest'}});
+              }}
+              if ({attempt} > 0) fireMouse(pick);
+              pick.click();
+              let selAfter = getSelectedText(s);
+              let selPh = isSelectedPlaceholder(s);
+              if ({attempt} > 0 && (selPh || selAfter !== wantText) && pick.querySelector) {{
+                const child = pick.querySelector('a, span, div, button');
+                if (child && typeof child.click === 'function') {{
+                  fireMouse(child);
+                  child.click();
+                  selAfter = getSelectedText(s);
+                  selPh = isSelectedPlaceholder(s);
+                }}
+              }}
+              const otherMutated = allTrigs.some((tEl, k) => tEl !== s && getSelectedText(tEl) !== otherBefore[k]);
+              if (otherMutated) {{
+                return {{clicked: 0, otherMutated: 1, selected: selAfter, selectedPlaceholder: selPh}};
+              }}
+              let rect = null;
+              if (isVisible(pick) && getOptText(pick) === wantText && pick.getBoundingClientRect) {{
+                const r = pick.getBoundingClientRect();
+                if (r.width > 0 && r.height > 0) {{
+                  rect = {{cx: Math.round(r.x + r.width / 2), cy: Math.round(r.y + r.height / 2), w: r.width, h: r.height}};
+                }}
+              }}
+              return {{
+                clicked: 1,
+                scope: res.scope,
+                wasPreSelected: (!selPhBefore && selBefore === selAfter),
+                closedOnPick: !isVisible(pick),
+                selected: selAfter,
+                selectedPlaceholder: selPh,
+                rect: rect
+              }};
+            """) or {}
+            time.sleep(0.25)
+            if not pick_res.get("clicked"):
+                force_close = True
+                st = "noopt"
+                continue
+            sel_after = pick_res.get("selected") or ""
+            sel_ph = bool(pick_res.get("selectedPlaceholder"))
+            if pick_res.get("scope") == "document" and pick_res.get("wasPreSelected") and not pick_res.get("closedOnPick"):
+                still_open = jso(t, _FITB_DOM_JS + f"const s = getTrigger({i}); return getScopedOptions(s).scope === 'document' ? 1 : 0;")
+                if still_open:
+                    force_close = True
+                    st = "noopt"
+                    continue
+            if not _ddl_selected_ok(sel_after, locked_target, sel_ph):
+                chk = jso(
+                    t,
+                    _FITB_DOM_JS
+                    + f"const s = getTrigger({i}); return {{selected: getSelectedText(s), selectedPlaceholder: isSelectedPlaceholder(s)}};",
+                ) or {}
+                sel_after = chk.get("selected") or ""
+                sel_ph = bool(chk.get("selectedPlaceholder"))
+            if not _ddl_selected_ok(sel_after, locked_target, sel_ph) and attempt > 0:
+                rect = pick_res.get("rect")
+                if isinstance(rect, dict) and rect.get("w", 0) > 0 and callable(getattr(t, "click_xy", None)):
+                    t.click_xy(rect["cx"], rect["cy"])
+                    time.sleep(0.2)
+                    chk = jso(
+                        t,
+                        _FITB_DOM_JS
+                        + f"const s = getTrigger({i}); return {{selected: getSelectedText(s), selectedPlaceholder: isSelectedPlaceholder(s)}};",
+                    ) or {}
+                    sel_after = chk.get("selected") or ""
+                    sel_ph = bool(chk.get("selectedPlaceholder"))
+            if _ddl_selected_ok(sel_after, locked_target, sel_ph):
+                verified_targets[i] = locked_target
+                st = "ok"
+                break
+            st = "empty"
         out.append(f"{i}={st}")
-    return "fitb: " + " ".join(out)
+
+    audit = jso(t, _FITB_DOM_JS + """
+      return getTriggers().map(s => ({
+        selected: getSelectedText(s),
+        selectedPlaceholder: isSelectedPlaceholder(s)
+      }));
+    """)
+    if isinstance(audit, list):
+        for j, state_j in enumerate(audit):
+            sel_j = (state_j or {}).get("selected") or ""
+            ph_j = bool((state_j or {}).get("selectedPlaceholder", True))
+            if j >= len(out):
+                out.append(f"{j}=empty")
+            elif out[j].endswith("=ok"):
+                if not _ddl_selected_ok(sel_j, verified_targets.get(j, ""), ph_j):
+                    out[j] = f"{j}=empty"
+        for j in range(len(audit), len(out)):
+            if out[j].endswith("=ok"):
+                out[j] = f"{j}=nf"
+
+    summary = "fitb: " + " ".join(out)
+    if not out or any(not item.endswith("=ok") for item in out):
+        return "other: " + summary
+    return summary
 
 
 def solve_select_text(t, src):
