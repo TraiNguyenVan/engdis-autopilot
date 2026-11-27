@@ -34,7 +34,7 @@ class SubmitTab:
         self.has_button, self.has_nav, self.throws = has_button, has_nav, throws
         self.nav_throws, self.button_appears = nav_throws, button_appears
 
-    def js(self, expr):
+    def js(self, expr, *, retry=True):
         if 'e.click(); return 1;' in expr or "triggerHandler('click')" in expr or 'navigationService?.submitTest' in expr:
             has_button = self.has_button or (self.button_appears and 'e.click(); return 1;' not in expr)
             spec = dict(script=expr, events=self.events, hasButton=has_button,

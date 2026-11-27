@@ -99,8 +99,9 @@ def st(t):
     }
 
 
-def click(t, sel):
-    return t.js("(() => {const e=document.querySelector(%s); if(!e) return 0; e.click(); return 1;})()" % json.dumps(sel))
+def click(t, sel, *, retry=True):
+    expr = "(() => {const e=document.querySelector(%s); if(!e) return 0; e.click(); return 1;})()" % json.dumps(sel)
+    return t.js(expr) if retry else t.js(expr, retry=False)
 
 
 def click_text(t, text):
@@ -682,7 +683,7 @@ class GuardedTab:
         self.tab = tab
         self.assessment_mode = bool(assessment_mode)
 
-    def js(self, expr):
+    def js(self, expr, *, retry=True):
         expected = "true" if self.assessment_mode else "false"
         wrapped = f"""(() => {{
           const assessment = {IS_TEST_AREA_JS};
@@ -690,7 +691,7 @@ class GuardedTab:
             return {{__ed_guard_blocked__: true}};
           return {{__ed_guard_value__: (({expr}) ?? null)}};
         }})()"""
-        result = self.tab.js(wrapped)
+        result = self.tab.js(wrapped) if retry else self.tab.js(wrapped, retry=False)
         if not isinstance(result, dict) or result.get("__ed_guard_blocked__") or "__ed_guard_value__" not in result:
             print("TAB-AUTHORIZATION-CHANGED — stopping without further actions")
             sys.exit(6)
@@ -981,7 +982,7 @@ def handle_test(t, src, unit_handler=None, lesson_name=""):
             # Never retry after an attempted click: it may already have submitted,
             # even if the browser reports an error or the transition is delayed.
             try:
-                clicked = click(t, selector)
+                clicked = click(t, selector, retry=False)
             except Exception:
                 return "test-submit-unverified"
             if clicked == 0:
@@ -995,7 +996,7 @@ def handle_test(t, src, unit_handler=None, lesson_name=""):
                       if (typeof app?.navigationService?.submitTest !== 'function') return 0;
                       app.navigationService.submitTest();
                       return 1;
-                    })()""")
+                    })()""", retry=False)
                 except Exception:
                     return "test-submit-unverified"
                 if fallback != 1:
@@ -1015,7 +1016,7 @@ def handle_test(t, src, unit_handler=None, lesson_name=""):
         poll.wait_until(
             lambda: q(t, "return (document.querySelector('iframe#colorBoxIframe') || document.querySelector('#colorbox') || document.querySelector('.modal'))?1:0;"),
             lambda v: v == 1, timeout=8.0, interval=0.2)
-        confirm_res = t.js("""(() => {
+        confirm_js = """(() => {
           let b = [...document.querySelectorAll('iframe#colorBoxIframe')].flatMap(f => {
             try { return [...(f.contentDocument || f.contentWindow.document).querySelectorAll('input, button, a')]; } catch(e) { return []; }
           }).filter(e=>/ok|continue|submit|yes|confirm/i.test((e.value||e.innerText||'').trim()));
@@ -1025,7 +1026,8 @@ def handle_test(t, src, unit_handler=None, lesson_name=""):
             .filter(e=>/ok|continue|submit|yes|confirm/i.test((e.value||e.innerText||'').trim()));
           if(b2.length) { b2[b2.length-1].click(); return 'colorbox-clicked'; }
           return 'none';
-        })()""")
+        })()"""
+        confirm_res = t.js(confirm_js)
         print(f"submit modal confirm result: {confirm_res}", flush=True)
         # Check if the review/score screen was triggered
         body = poll.wait_until(

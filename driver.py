@@ -12,7 +12,10 @@ class Tab:
         self.dialogs = []
         self.events = []
 
-    def send(self, method, timeout=60, **params):
+    def send(self, method, timeout=60, *, retry=True, **params):
+        if not retry:
+            # A lost response does not prove the command wasn't delivered.
+            return self._send(method, timeout, params)
         try:
             return self._send(method, timeout, params)
         except (ConnectionClosed, OSError):
@@ -70,9 +73,9 @@ class Tab:
                     del self.events[:2000]
         raise TimeoutError(method)
 
-    def js(self, expr):
+    def js(self, expr, *, retry=True):
         r = self.send("Runtime.evaluate", expression=expr, returnByValue=True,
-                      awaitPromise=True, userGesture=True)
+                      awaitPromise=True, userGesture=True, retry=retry)
         if "exceptionDetails" in r:
             raise RuntimeError(json.dumps(r["exceptionDetails"])[:500])
         return r.get("result", {}).get("value")
