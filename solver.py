@@ -10,9 +10,6 @@ import config
 
 _monotonic = time.monotonic
 _ORIG_URLOPEN = urllib.request.urlopen
-# getaddrinfo cannot be cancelled in Python. Bound outstanding lookups so a
-# stuck resolver cannot create an unbounded number of retained threads.
-_RESOLVER_SLOTS = threading.BoundedSemaphore(4)
 
 
 class _ConfigTimeout(int):
@@ -78,37 +75,6 @@ def _register_sock(state, lock, sock):
         raise TimeoutError("LLM request aborted after timeout")
 
 
-def _resolve_with_deadline(host, port, deadline, timeout):
-    remaining = deadline - _monotonic()
-    if remaining <= 0 or not _RESOLVER_SLOTS.acquire(timeout=remaining):
-        raise TimeoutError("LLM request exceeded %ss total timeout" % timeout)
-    if _monotonic() >= deadline:
-        _RESOLVER_SLOTS.release()
-        raise TimeoutError("LLM request exceeded %ss total timeout" % timeout)
-    done = threading.Event()
-    result = {}
-
-    def resolve():
-        try:
-            result["infos"] = socket.getaddrinfo(host, port, 0, socket.SOCK_STREAM)
-        except Exception as exc:
-            result["exc"] = exc
-        finally:
-            _RESOLVER_SLOTS.release()
-            done.set()
-
-    try:
-        threading.Thread(target=resolve, name="ed-llm-resolve", daemon=True).start()
-    except BaseException:
-        _RESOLVER_SLOTS.release()
-        raise
-    if not done.wait(max(0, deadline - _monotonic())):
-        raise TimeoutError("LLM request exceeded %ss total timeout" % timeout)
-    if "exc" in result:
-        raise result["exc"]
-    return result["infos"]
-
-
 def _open_cancellable(req, timeout, deadline, state, lock):
     if urllib.request.urlopen is not _ORIG_URLOPEN:
         return urllib.request.urlopen(req, timeout=timeout)
@@ -116,7 +82,8 @@ def _open_cancellable(req, timeout, deadline, state, lock):
     def _create_conn(address, conn_timeout=socket._GLOBAL_DEFAULT_TIMEOUT, source_address=None):
         host, port = address
         last_err = None
-        infos = _resolve_with_deadline(host, port, deadline, timeout)
+        # System DNS cannot be interrupted by closing the request socket.
+        infos = socket.getaddrinfo(host, port, 0, socket.SOCK_STREAM)
         if not infos:
             raise OSError("getaddrinfo returns an empty list")
         for af, socktype, proto, _canon, sa in infos:
