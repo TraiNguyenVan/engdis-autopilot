@@ -298,12 +298,34 @@ class TotalDeadlineStreamingTests(unittest.TestCase):
     def _run_loopback_scenario(self, slow_mode):
         seen_models = []
         stop_drip = threading.Event()
+        peer_disconnected = threading.Event()
 
         class _DripHandler(http.server.BaseHTTPRequestHandler):
             protocol_version = "HTTP/1.1"
 
             def log_message(self, fmt, *args):
                 pass
+
+            def _wait_or_detect_close(self, delay):
+                # Poll socket readability with MSG_PEEK so we detect client-side
+                # SHUT_RDWR / close immediately even before the next write.
+                end = time.monotonic() + delay
+                while not stop_drip.is_set():
+                    rem = end - time.monotonic()
+                    if rem <= 0:
+                        return True
+                    self.connection.settimeout(min(0.05, rem))
+                    try:
+                        data = self.connection.recv(1, socket.MSG_PEEK)
+                        if data == b"":
+                            peer_disconnected.set()
+                            return False
+                    except TimeoutError:
+                        continue
+                    except OSError:
+                        peer_disconnected.set()
+                        return False
+                return False
 
             def do_POST(self):
                 length = int(self.headers.get("Content-Length", "0"))
@@ -317,47 +339,43 @@ class TotalDeadlineStreamingTests(unittest.TestCase):
                             self.send_response(200)
                             self.send_header("Content-Type", "text/event-stream")
                             self.end_headers()
-                            for _ in range(12):
-                                if stop_drip.is_set():
-                                    break
+                            for _ in range(20):
                                 self.wfile.write(b'data: {"choices":[{"delta":{"content":"x"}}]}\n\n')
                                 self.wfile.flush()
-                                stop_drip.wait(0.2)
+                                if not self._wait_or_detect_close(0.2):
+                                    break
                         elif slow_mode == "headers":
                             self.wfile.write(b"HTTP/1.1 200 OK\r\n")
                             self.wfile.flush()
-                            for idx in range(12):
-                                if stop_drip.is_set():
-                                    break
-                                self.wfile.write(f"X-Drip-{idx}: slow\r\n".encode("ascii"))
+                            for idx in range(20):
+                                # Drip incomplete header fragments too, matching review repro
+                                self.wfile.write(f"X-Drip-{idx}: partial".encode("ascii"))
                                 self.wfile.flush()
-                                stop_drip.wait(0.2)
-                            self.wfile.write(b"Content-Length: 2\r\n\r\n{}")
-                            self.wfile.flush()
+                                if not self._wait_or_detect_close(0.2):
+                                    break
+                                self.wfile.write(b"\r\n")
+                                self.wfile.flush()
                         elif slow_mode == "chunk_framing":
                             self.wfile.write(
                                 b"HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\n\r\n"
                             )
                             self.wfile.flush()
-                            for _ in range(12):
-                                if stop_drip.is_set():
-                                    break
-                                # Drip hex digits of chunk size without CRLF so readline blocks
+                            for _ in range(20):
                                 self.wfile.write(b"0")
                                 self.wfile.flush()
-                                stop_drip.wait(0.2)
+                                if not self._wait_or_detect_close(0.2):
+                                    break
                         elif slow_mode == "http_error_body":
                             self.send_response(503)
                             self.send_header("Content-Type", "text/plain")
                             self.end_headers()
-                            for _ in range(12):
-                                if stop_drip.is_set():
-                                    break
+                            for _ in range(20):
                                 self.wfile.write(b"upstream overload ")
                                 self.wfile.flush()
-                                stop_drip.wait(0.2)
+                                if not self._wait_or_detect_close(0.2):
+                                    break
                     except OSError:
-                        pass
+                        peer_disconnected.set()
                     return
 
                 payload = json.dumps(
@@ -382,37 +400,52 @@ class TotalDeadlineStreamingTests(unittest.TestCase):
                  patch("builtins.print"):
                 answer = solver.ask("ping")
             elapsed = time.monotonic() - start
+            # Verify BEFORE server teardown (while server would still be dripping for ~4s)
+            # that zero ed-llm-fetch worker threads remain alive and peer socket closed!
+            leaked_workers = [
+                t for t in threading.enumerate()
+                if t.name == "ed-llm-fetch" and t.is_alive()
+            ]
+            closed_promptly = peer_disconnected.wait(timeout=0.3)
         finally:
             stop_drip.set()
             server.shutdown()
             server.server_close()
             thread.join(timeout=2)
 
-        return answer, seen_models, elapsed
+        return answer, seen_models, elapsed, leaked_workers, closed_promptly
 
     def test_periodic_streaming_body_exceeding_total_deadline_fails_over(self):
-        answer, seen_models, elapsed = self._run_loopback_scenario("body")
+        answer, seen_models, elapsed, leaked, closed = self._run_loopback_scenario("body")
         self.assertEqual(answer, "fast-fallback-ok")
         self.assertEqual(seen_models, ["slow-model", "fast-model"])
         self.assertLess(elapsed, 1.35)
+        self.assertEqual(leaked, [])
+        self.assertTrue(closed)
 
-    def test_slow_drip_response_headers_enforces_wall_clock_deadline(self):
-        answer, seen_models, elapsed = self._run_loopback_scenario("headers")
+    def test_slow_drip_response_headers_enforces_deadline_and_stops_worker_and_socket(self):
+        answer, seen_models, elapsed, leaked, closed = self._run_loopback_scenario("headers")
         self.assertEqual(answer, "fast-fallback-ok")
         self.assertEqual(seen_models, ["slow-model", "fast-model"])
         self.assertLess(elapsed, 1.35)
+        self.assertEqual(leaked, [], "Timed-out header worker thread must terminate on deadline")
+        self.assertTrue(closed, "Timed-out header client socket must close on deadline")
 
     def test_slow_drip_chunk_framing_enforces_wall_clock_deadline(self):
-        answer, seen_models, elapsed = self._run_loopback_scenario("chunk_framing")
+        answer, seen_models, elapsed, leaked, closed = self._run_loopback_scenario("chunk_framing")
         self.assertEqual(answer, "fast-fallback-ok")
         self.assertEqual(seen_models, ["slow-model", "fast-model"])
         self.assertLess(elapsed, 1.35)
+        self.assertEqual(leaked, [])
+        self.assertTrue(closed)
 
     def test_slow_drip_http_error_body_enforces_wall_clock_deadline(self):
-        answer, seen_models, elapsed = self._run_loopback_scenario("http_error_body")
+        answer, seen_models, elapsed, leaked, closed = self._run_loopback_scenario("http_error_body")
         self.assertEqual(answer, "fast-fallback-ok")
         self.assertEqual(seen_models, ["slow-model", "fast-model"])
         self.assertLess(elapsed, 1.35)
+        self.assertEqual(leaked, [])
+        self.assertTrue(closed)
 
 
 if __name__ == "__main__":

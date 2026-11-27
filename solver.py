@@ -3,12 +3,13 @@
 Drives own headless Chromium over CDP; answers via a cheap remote LLM.
 Prints one terse line per task.
 """
-import base64, json, os, socket, subprocess, sys, threading, time, urllib.request
+import base64, http.client, json, os, socket, subprocess, sys, threading, time, urllib.request
 
 import edlib
 import config
 
 _monotonic = time.monotonic
+_ORIG_URLOPEN = urllib.request.urlopen
 
 
 class _ConfigTimeout(int):
@@ -24,6 +25,19 @@ SCRATCH = config.SCRATCH
 
 
 # ---------- LLM ----------
+def _shutdown_sock(sock):
+    if sock is None:
+        return
+    try:
+        sock.shutdown(socket.SHUT_RDWR)
+    except Exception:
+        pass
+    try:
+        sock.close()
+    except Exception:
+        pass
+
+
 def _extract_sock(obj):
     for candidate in (obj, getattr(obj, "fp", None)):
         if candidate is None:
@@ -39,21 +53,97 @@ def _extract_sock(obj):
 def _abort_response(resp):
     if resp is None:
         return
-    sock = _extract_sock(resp)
-    if sock is not None:
-        try:
-            sock.shutdown(socket.SHUT_RDWR)
-        except Exception:
-            pass
-        try:
-            sock.close()
-        except Exception:
-            pass
+    _shutdown_sock(_extract_sock(resp))
     if hasattr(resp, "close"):
         try:
             resp.close()
         except Exception:
             pass
+
+
+def _register_sock(state, lock, sock):
+    if sock is None:
+        return
+    abort_now = False
+    with lock:
+        if state["aborted"]:
+            abort_now = True
+        elif sock not in state["socks"]:
+            state["socks"].append(sock)
+    if abort_now:
+        _shutdown_sock(sock)
+        raise TimeoutError("LLM request aborted after timeout")
+
+
+def _open_cancellable(req, timeout, deadline, state, lock):
+    if urllib.request.urlopen is not _ORIG_URLOPEN:
+        return urllib.request.urlopen(req, timeout=timeout)
+
+    def _create_conn(address, conn_timeout=socket._GLOBAL_DEFAULT_TIMEOUT, source_address=None):
+        host, port = address
+        last_err = None
+        infos = socket.getaddrinfo(host, port, 0, socket.SOCK_STREAM)
+        if not infos:
+            raise OSError("getaddrinfo returns an empty list")
+        for af, socktype, proto, _canon, sa in infos:
+            sock = None
+            try:
+                remaining = deadline - _monotonic()
+                if remaining <= 0:
+                    raise TimeoutError("LLM request exceeded %ss total timeout" % timeout)
+                sock = socket.socket(af, socktype, proto)
+                _register_sock(state, lock, sock)
+                if conn_timeout is socket._GLOBAL_DEFAULT_TIMEOUT or conn_timeout is None:
+                    eff_timeout = remaining
+                else:
+                    eff_timeout = min(conn_timeout, remaining)
+                sock.settimeout(eff_timeout)
+                if source_address:
+                    sock.bind(source_address)
+                sock.connect(sa)
+                return sock
+            except Exception as exc:
+                last_err = exc
+                if sock is not None:
+                    _shutdown_sock(sock)
+                if state["aborted"] or _monotonic() >= deadline:
+                    break
+        if last_err is not None:
+            raise last_err
+        raise TimeoutError("LLM request exceeded %ss total timeout" % timeout)
+
+    class _HTTPConn(http.client.HTTPConnection):
+        def __init__(self, *args, **kwargs):
+            super().__init__(*args, **kwargs)
+            self._create_connection = _create_conn
+
+        def connect(self):
+            super().connect()
+            _register_sock(state, lock, self.sock)
+
+    class _HTTPHandler(urllib.request.HTTPHandler):
+        def http_open(self, r):
+            return self.do_open(_HTTPConn, r)
+
+    handlers = [_HTTPHandler]
+    if hasattr(urllib.request, "HTTPSHandler") and hasattr(http.client, "HTTPSConnection"):
+        class _HTTPSConn(http.client.HTTPSConnection):
+            def __init__(self, *args, **kwargs):
+                super().__init__(*args, **kwargs)
+                self._create_connection = _create_conn
+
+            def connect(self):
+                super().connect()
+                _register_sock(state, lock, self.sock)
+
+        class _HTTPSHandler(urllib.request.HTTPSHandler):
+            def https_open(self, r):
+                return self.do_open(_HTTPSConn, r, context=self._context)
+
+        handlers.append(_HTTPSHandler)
+
+    opener = urllib.request.build_opener(*handlers)
+    return opener.open(req, timeout=timeout)
 
 
 def _read_with_deadline(resp, deadline, timeout, sink=None, allow_partial=False):
@@ -89,8 +179,10 @@ def _read_with_deadline(resp, deadline, timeout, sink=None, allow_partial=False)
 
 def _fetch_with_deadline(req, timeout):
     deadline = _monotonic() + timeout
+    lock = threading.Lock()
     state = {
         "resp": None,
+        "socks": [],
         "body": None,
         "http_err": None,
         "err_chunks": [],
@@ -101,9 +193,10 @@ def _fetch_with_deadline(req, timeout):
     def _worker():
         resp = None
         try:
-            resp = urllib.request.urlopen(req, timeout=timeout)
+            resp = _open_cancellable(req, timeout, deadline, state, lock)
             state["resp"] = resp
-            if state["aborted"]:
+            if state["aborted"] or _monotonic() > deadline:
+                state["aborted"] = True
                 return
             state["body"] = _read_with_deadline(resp, deadline, timeout).decode()
         except urllib.error.HTTPError as e:
@@ -117,31 +210,48 @@ def _fetch_with_deadline(req, timeout):
         except Exception as e:
             state["exc"] = e
         finally:
-            if state["aborted"]:
+            with lock:
+                aborted = state["aborted"]
+                tracked_socks = list(state["socks"])
+            if aborted:
+                for s in tracked_socks:
+                    _shutdown_sock(s)
                 _abort_response(state["resp"] or resp)
-            elif state["http_err"] is not None:
-                if hasattr(state["http_err"], "close"):
+            else:
+                if state["http_err"] is not None and hasattr(state["http_err"], "close"):
                     try:
                         state["http_err"].close()
                     except Exception:
                         pass
-            elif resp is not None and hasattr(resp, "close"):
-                try:
-                    resp.close()
-                except Exception:
-                    pass
+                elif resp is not None and hasattr(resp, "close"):
+                    try:
+                        resp.close()
+                    except Exception:
+                        pass
+                for s in tracked_socks:
+                    try:
+                        s.close()
+                    except Exception:
+                        pass
 
-    worker = threading.Thread(target=_worker, daemon=True)
+    worker = threading.Thread(target=_worker, name="ed-llm-fetch", daemon=True)
     worker.start()
     remaining = deadline - _monotonic()
     if remaining > 0:
         worker.join(remaining)
     if worker.is_alive():
-        state["aborted"] = True
+        with lock:
+            state["aborted"] = True
+            socks_to_abort = list(state["socks"])
+        for s in socks_to_abort:
+            _shutdown_sock(s)
         _abort_response(state["resp"])
+        worker.join(0.2)
         if state["http_err"] is not None:
             err_msg = b"".join(list(state["err_chunks"])).decode("utf-8", errors="replace")
             return None, state["http_err"], err_msg
+        raise TimeoutError("LLM request exceeded %ss total timeout" % timeout)
+    if state["aborted"] and state["body"] is None and state["http_err"] is None:
         raise TimeoutError("LLM request exceeded %ss total timeout" % timeout)
     if state["http_err"] is not None:
         err_msg = b"".join(list(state["err_chunks"])).decode("utf-8", errors="replace")
