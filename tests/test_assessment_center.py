@@ -223,6 +223,7 @@ class TargetTabAndSessionTests(unittest.TestCase):
         self.assertTrue(run_node_js(auto.IS_LIVE_ASSESSMENT_SESSION_JS, url=url, nodes={"app": app})["res"])
         self.assertEqual(run_node_js(auto.ASSESSMENT_SUBMIT_STATE_JS, url=url, nodes={"app": app})["res"], "unknown")
 
+    @patch.dict(os.environ, {"ED_ASSESSMENT": "1"})
     def test_handle_test_refuses_ambiguous_assessment_before_solving(self):
         for url in ("https://ed22.engdis.com/Runtime/TestArea.html", "https://ed22.engdis.com/assessment/active"):
             with self.subTest(url=url):
@@ -271,6 +272,151 @@ class TargetTabAndSessionTests(unittest.TestCase):
              patch.object(auto, "st", side_effect=AssertionError("lesson flow was entered")):
             with self.assertRaises(SystemExit) as ctx:
                 auto.main(max_iter=1)
+        self.assertEqual(ctx.exception.code, 6)
+
+    def test_mid_iteration_change_to_unrequested_assessment_stops_before_solver(self):
+        class Tab:
+            def js(self, expr):
+                return run_node_js(expr, url="https://ed22.engdis.com/Runtime/TestArea.html")["res"]
+        with patch.dict(os.environ, {"ED_ASSESSMENT": ""}), \
+             patch.object(auto.sys, "argv", ["auto.py"]), \
+             patch.object(auto.solver, "dom_transcript", return_value=""), \
+             patch.object(auto.solver, "do_task", side_effect=AssertionError("solver ran")), \
+             patch.object(auto, "click", side_effect=AssertionError("submit ran")):
+            with self.assertRaises(SystemExit) as ctx:
+                auto.handle_test(Tab(), "question")
+        self.assertEqual(ctx.exception.code, 6)
+
+    def test_guarded_tab_rechecks_each_evaluation_after_transition(self):
+        class Tab:
+            url = "https://ed22.engdis.com/Runtime/learningArea.html"
+            def js(self, expr):
+                return run_node_js(expr, url=self.url)["res"]
+        tab = Tab()
+        guarded = auto.GuardedTab(tab, assessment_mode=False)
+        self.assertEqual(guarded.js("1 + 1"), 2)
+        tab.url = "https://ed22.engdis.com/Runtime/TestArea.html"
+        with self.assertRaises(SystemExit) as ctx:
+            guarded.js("42")
+        self.assertEqual(ctx.exception.code, 6)
+
+    def test_transition_after_answer_before_submit_stops_submission(self):
+        tab = Mock()
+        tab.js.return_value = ""
+        identities = iter([False, False, False, True])
+        with patch.dict(os.environ, {"ED_ASSESSMENT": ""}), \
+             patch.object(auto.sys, "argv", ["auto.py"]), \
+             patch.object(auto, "is_test_area", side_effect=lambda _t: next(identities, True)), \
+             patch.object(auto.solver, "dom_transcript", return_value=""), \
+             patch.object(auto.solver, "do_task", return_value="mcq: A"), \
+             patch.object(auto, "q", return_value=0), \
+             patch.object(auto, "st", return_value={"counter": "1", "total": "1"}), \
+             patch.object(auto, "click", side_effect=AssertionError("submit ran")):
+            with self.assertRaises(SystemExit) as ctx:
+                auto.handle_test(tab, "question")
+        self.assertEqual(ctx.exception.code, 6)
+
+    def test_guarded_tab_blocks_pointer_input_after_transition(self):
+        class Tab:
+            url = "https://ed22.engdis.com/Runtime/learningArea.html"
+            calls = []
+            def js(self, expr):
+                return run_node_js(expr, url=self.url)["res"]
+            def send(self, method, **kwargs):
+                self.calls.append((method, kwargs))
+                return {}
+        tab = Tab()
+        guarded = auto.GuardedTab(tab, assessment_mode=False)
+        tab.url = "https://ed22.engdis.com/assessment/active"
+        with self.assertRaises(SystemExit) as ctx:
+            guarded.send("Input.dispatchMouseEvent", type="mousePressed", x=1, y=2)
+        self.assertEqual(ctx.exception.code, 6)
+        self.assertEqual(tab.calls, [])
+
+    def test_transition_before_login_navigation_is_refused(self):
+        class Tab:
+            url = "https://ed22.engdis.com/Runtime/learningArea.html"
+            navigations = []
+            def js(self, expr):
+                return run_node_js(expr, url=self.url)["res"]
+            def goto(self, url, wait=3):
+                self.navigations.append(url)
+            def send(self, method, **kwargs):
+                self.navigations.append(method)
+        tab = Tab()
+        def login(t):
+            tab.url = "https://ed22.engdis.com/Runtime/TestArea.html"
+            t.goto("https://example.invalid/login", wait=0)
+            return True
+        with patch.dict(os.environ, {"ED_ASSESSMENT": ""}), \
+             patch.object(auto.sys, "argv", ["auto.py"]), \
+             patch.object(auto, "select_target_tab", return_value=tab), \
+             patch.object(auto.login, "ensure_login", side_effect=login):
+            with self.assertRaises(SystemExit) as ctx:
+                auto.main(0)
+        self.assertEqual(ctx.exception.code, 6)
+        self.assertEqual(tab.navigations, [])
+
+    def test_main_installs_action_guard_before_lesson_solver(self):
+        tab = Mock()
+        tab.js.return_value = 0
+        state = {"unit": "Unit 1", "lesson": "L", "step": "Test", "counter": "1", "total": "2", "body": ""}
+        seen = []
+        with patch.dict(os.environ, {"ED_ASSESSMENT": ""}), \
+             patch.object(auto.sys, "argv", ["auto.py"]), \
+             patch.object(auto, "select_target_tab", return_value=tab), \
+             patch.object(auto, "is_test_area", return_value=False), \
+             patch.object(auto, "ensure_session", return_value=True), \
+             patch.object(auto, "st", return_value=state), \
+             patch.object(auto, "update_live_status"), \
+             patch.object(auto.solver, "source_text", return_value={"resource": "", "body": ""}), \
+             patch.object(auto.solver, "neutralize"), \
+             patch.object(auto, "q", return_value=0), \
+             patch.object(auto.poll, "wait_until"), \
+             patch.object(auto, "handle_test", side_effect=lambda t, *a, **k: seen.append(t) or "test-unanswered: timeout"):
+            def respond(expr):
+                if "__ed_guard_value__" in expr:
+                    return {"__ed_guard_value__": auto.IS_TEST_JS in expr}
+                return True if expr == auto.IS_TEST_JS else 0
+            tab.js.side_effect = respond
+            auto.main(1)
+        self.assertEqual(len(seen), 1)
+        self.assertIsInstance(seen[0], auto.GuardedTab)
+
+    def test_guarded_tab_rechecks_before_each_js_and_pointer_action(self):
+        calls = []
+        class Tab:
+            url = "https://ed22.engdis.com/Runtime/learningArea.html"
+            def js(self, expr):
+                calls.append(expr)
+                return run_node_js(expr, url=self.url)["res"]
+            def send(self, method, **kwargs):
+                calls.append(method)
+        tab = Tab()
+        guarded = auto.GuardedTab(tab, False)
+        self.assertEqual(guarded.js("1"), 1)
+        tab.url = "https://ed22.engdis.com/assessment/active"
+        with self.assertRaises(SystemExit):
+            guarded.js("42")
+        with self.assertRaises(SystemExit):
+            guarded.send("Input.insertText", text="answer")
+        self.assertNotIn("Input.insertText", calls)
+
+    def test_transition_during_transcript_stops_before_solver_dispatch(self):
+        class Tab:
+            url = "https://ed22.engdis.com/Runtime/learningArea.html"
+            def js(self, expr):
+                return run_node_js(expr, url=self.url)["res"]
+        tab = Tab()
+        def transcript(_):
+            tab.url = "https://ed22.engdis.com/assessment/active"
+            return "text"
+        with patch.dict(os.environ, {"ED_ASSESSMENT": ""}), \
+             patch.object(auto.sys, "argv", ["auto.py"]), \
+             patch.object(auto.solver, "dom_transcript", side_effect=transcript), \
+             patch.object(auto.solver, "do_task", side_effect=AssertionError("solver ran")):
+            with self.assertRaises(SystemExit) as ctx:
+                auto.handle_test(tab, "question")
         self.assertEqual(ctx.exception.code, 6)
 
     def test_select_target_tab_prefers_testarea_tab_over_learningarea_when_requested(self):
@@ -357,6 +503,7 @@ class TargetTabAndSessionTests(unittest.TestCase):
         login_mock.assert_not_called()
 
     @patch.dict(os.environ, {"ED_ASSESSMENT": "1"})
+    @patch.object(auto, "GuardedTab", new=lambda tab, assessment_mode: tab)
     def test_main_stops_immediately_if_assessment_tab_leaves_testarea(self):
         test_area_checks = iter([True, False])
 
@@ -491,6 +638,7 @@ class TestIntroHandlingTests(unittest.TestCase):
         self.assertEqual(out_non_intro["selectedChanged"], [])
 
     @patch.dict(os.environ, {"ED_ASSESSMENT": "1"})
+    @patch.object(auto, "GuardedTab", new=lambda tab, assessment_mode: tab)
     def test_main_advances_past_testintronode_without_calling_handle_test(self):
         class Tab:
             def js(self, expr):
@@ -554,6 +702,7 @@ class TestIntroHandlingTests(unittest.TestCase):
         self.assertEqual(out["res"], "TestIntroNode")
 
     @patch.dict(os.environ, {"ED_ASSESSMENT": "1"})
+    @patch.object(auto, "GuardedTab", new=lambda tab, assessment_mode: tab)
     def test_failed_test_intro_does_not_reset_prev_stall_detector(self):
         class Tab:
             def js(self, expr):
@@ -687,6 +836,7 @@ class MultiPartProgressionTests(unittest.TestCase):
             self.assertTrue(auto.advance_next_part(tab))
 
     @patch.dict(os.environ, {"ED_ASSESSMENT": "1"})
+    @patch.object(auto, "GuardedTab", new=lambda tab, assessment_mode: tab)
     def test_main_calls_advance_next_part_at_part_boundary_10_of_30(self):
         class Tab:
             def js(self, expr):
@@ -802,6 +952,7 @@ class UnansweredAndPreSubmitGateTests(unittest.TestCase):
             self.assertEqual(res, f"test-unanswered: {bad}", bad)
             click_mock.assert_not_called()
 
+    @patch.dict(os.environ, {"ED_ASSESSMENT": "1"})
     def test_submit_gate_fails_closed_when_assessment_or_lesson_data_is_missing(self):
         # TestArea URL with missing Angular probe -> 'unknown', NOT 'ready'
         out_no_ng = run_node_js(
@@ -951,6 +1102,7 @@ class UnansweredAndPreSubmitGateTests(unittest.TestCase):
         self.assertEqual(out_skipped["res"], "incomplete")
         self.assertEqual(out_skipped["selectedChanged"], [])
 
+    @patch.dict(os.environ, {"ED_ASSESSMENT": "1"})
     def test_handle_test_submits_with_testarea_selector_without_manufacturing_progress(self):
         executed_scripts = []
 
@@ -991,6 +1143,7 @@ class UnansweredAndPreSubmitGateTests(unittest.TestCase):
 @unittest.skipUnless(NODE_BIN, "node required for JS evaluation tests")
 class AssessmentScoreAndSectionTransitionTests(unittest.TestCase):
     @patch.dict(os.environ, {"ED_ASSESSMENT": "1"})
+    @patch.object(auto, "GuardedTab", new=lambda tab, assessment_mode: tab)
     def test_failed_submission_stops_immediately_without_repeating_or_forging_progress(self):
         executed = []
 
@@ -1217,6 +1370,7 @@ class AssessmentScoreAndSectionTransitionTests(unittest.TestCase):
                     return True
                 return run_node_js(
                     expr,
+                    nodes={"#pmContainer": {}},
                     url="https://ed22.engdis.com/Runtime/TestArea.html",
                     body=body,
                 )["res"]
@@ -1245,6 +1399,7 @@ class AssessmentScoreAndSectionTransitionTests(unittest.TestCase):
         self.assertIn("lacks verified final completion state", err.getvalue())
 
     @patch.dict(os.environ, {"ED_ASSESSMENT": "1"})
+    @patch.object(auto, "GuardedTab", new=lambda tab, assessment_mode: tab)
     def test_main_exits_zero_on_verified_final_testarea_score_screen(self):
         class Tab:
             def js(self, expr):
@@ -1280,6 +1435,7 @@ class AssessmentScoreAndSectionTransitionTests(unittest.TestCase):
         self.assertIn("Your score is 100%.", buf.getvalue())
 
     @patch.dict(os.environ, {"ED_ASSESSMENT": "1"})
+    @patch.object(auto, "GuardedTab", new=lambda tab, assessment_mode: tab)
     def test_main_continues_to_next_section_after_verified_section_submit_and_exits_after_final(self):
         nav_sigs = iter(["sec1-q30", "sec2-q1", "sec2-q20"])
         post_bodies = iter([
@@ -1340,6 +1496,7 @@ class AssessmentScoreAndSectionTransitionTests(unittest.TestCase):
         req_mock.assert_not_called()
         self.assertIn("Your score is 100%.", buf.getvalue())
 
+    @patch.object(auto, "GuardedTab", new=lambda tab, assessment_mode: tab)
     def test_standard_course_lesson_score_screen_still_calls_require_lesson_complete(self):
         class Tab:
             def js(self, expr):

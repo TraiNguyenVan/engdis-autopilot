@@ -675,6 +675,63 @@ def select_target_tab(port=None):
     sys.exit(6)
 
 
+class GuardedTab:
+    """Recheck page identity within each JS evaluation before executing its expression."""
+
+    def __init__(self, tab, assessment_mode):
+        self.tab = tab
+        self.assessment_mode = bool(assessment_mode)
+
+    def js(self, expr):
+        expected = "true" if self.assessment_mode else "false"
+        wrapped = f"""(() => {{
+          const assessment = {IS_TEST_AREA_JS};
+          if (assessment !== {expected} || (assessment && document.querySelectorAll('ed-la-dropdownlist').length > 0))
+            return {{__ed_guard_blocked__: true}};
+          return {{__ed_guard_value__: (({expr}) ?? null)}};
+        }})()"""
+        result = self.tab.js(wrapped)
+        if not isinstance(result, dict) or result.get("__ed_guard_blocked__") or "__ed_guard_value__" not in result:
+            print("TAB-AUTHORIZATION-CHANGED — stopping without further actions")
+            sys.exit(6)
+        return result["__ed_guard_value__"]
+
+    def send(self, method, *args, **kwargs):
+        self.js("true")
+        return self.tab.send(method, *args, **kwargs)
+
+    def goto(self, url, wait=3.0):
+        self.send("Page.navigate", url=url)
+        time.sleep(wait)
+
+    def mouse(self, etype, x, y, button="none", buttons=0, clickCount=0):
+        return self.send("Input.dispatchMouseEvent", type=etype, x=x, y=y,
+                         button=button, buttons=buttons, clickCount=clickCount,
+                         pointerType="mouse")
+
+    def click_xy(self, x, y):
+        self.mouse("mouseMoved", x, y)
+        self.mouse("mousePressed", x, y, "left", 1, 1)
+        time.sleep(0.05)
+        self.mouse("mouseReleased", x, y, "left", 0, 1)
+
+    def drag_xy(self, x1, y1, x2, y2, steps=12, pause=0.06):
+        self.mouse("mouseMoved", x1, y1)
+        time.sleep(0.1)
+        self.mouse("mousePressed", x1, y1, "left", 1, 1)
+        time.sleep(0.1)
+        for i in range(1, steps + 1):
+            self.mouse("mouseMoved", x1 + (x2 - x1) * i / steps,
+                       y1 + (y2 - y1) * i / steps, "left", 1)
+            time.sleep(pause)
+        time.sleep(0.1)
+        self.mouse("mouseReleased", x2, y2, "left", 0, 1)
+        time.sleep(0.4)
+
+    def __getattr__(self, name):
+        return getattr(self.tab, name)
+
+
 def ensure_session(t, assessment_locked=False):
     """Recognize live Assessment Center sessions so `login.ensure_login` never navigates away."""
     if bool(t.js(IS_LIVE_ASSESSMENT_SESSION_JS)):
@@ -855,9 +912,20 @@ def handle_branch(t, src):
     return "branch: " + opts[idx][:40]
 
 
+def require_action_mode(t, expected_assessment):
+    current = is_test_area(t)
+    if current != expected_assessment or (current and t.js("(() => document.querySelectorAll('ed-la-dropdownlist').length > 0)()")):
+        print("TAB-AUTHORIZATION-CHANGED — stopping without further actions")
+        sys.exit(6)
+
+
 def handle_test(t, src, unit_handler=None, lesson_name=""):
     """Answer a test question set, submit on the last one."""
-    if is_test_area(t) and t.js("(() => document.querySelectorAll('ed-la-dropdownlist').length > 0)()"):
+    test_area = is_test_area(t)
+    if test_area and not (os.environ.get("ED_ASSESSMENT") == "1" or "--assessment" in sys.argv):
+        print("UNREQUESTED-ASSESSMENT-TAB — stopping")
+        sys.exit(6)
+    if test_area and t.js("(() => document.querySelectorAll('ed-la-dropdownlist').length > 0)()"):
         return "test-unanswered: completeness-unknown"
     # Listening tests score 40% if answered blind; transcribe the audio once per test.
     if "[TRANSCRIPT]" not in src:
@@ -880,10 +948,13 @@ def handle_test(t, src, unit_handler=None, lesson_name=""):
                 if tr:
                     src = "[TRANSCRIPT]\n" + tr + "\n\n" + src
                     print("test transcript", key, len(tr))
+    expected_assessment = os.environ.get("ED_ASSESSMENT") == "1" or "--assessment" in sys.argv
     out = None
     if unit_handler:
+        require_action_mode(t, expected_assessment)
         out = unit_handler.on_task(t, {"type": "test", "src": src, "lesson": lesson_name})
     if out is None:
+        require_action_mode(t, expected_assessment)
         out = solver.do_task(t, src)
     # A speaking step can slip through as a test while the LMS keeps a hidden
     # test container (`.testResultTools`, `.learning__submitTestLink`) in the
@@ -894,6 +965,7 @@ def handle_test(t, src, unit_handler=None, lesson_name=""):
       return b ? String(b.className || 'speaking') : '';
     })()""")
     if str(out).startswith("other:") and speak_widget:
+        require_action_mode(t, expected_assessment)
         return handle_speaking(t, src)
     # Require positive evidence of a registered answer and reject solver error/nodata outputs.
     def unanswered(result):
@@ -901,6 +973,7 @@ def handle_test(t, src, unit_handler=None, lesson_name=""):
 
     if unanswered(out):
         time.sleep(1.5)
+        require_action_mode(t, expected_assessment)
         retry = solver.do_task(t, src)
         out = retry
         print("test retry", str(retry)[:60], flush=True)
@@ -921,6 +994,7 @@ def handle_test(t, src, unit_handler=None, lesson_name=""):
             if gate != "ready":
                 return "test-unanswered: completeness-unknown"
         before_sig = t.js(NAV_STATE_SIG_JS) if test_area else None
+        require_action_mode(t, expected_assessment)
         click(t, "#learning__tasksNav_submitTest, a.learning__submitTestLink, .learning__submitTestLink, .learning__tasksNav_testBtnW")
         t.js("(() => {const a=document.querySelector('#learning__tasksNav_submitTest, .learning__submitTestLink'); if(a && window.angular) angular.element(a).triggerHandler('click');})()")
         t.js("""(() => {
@@ -1076,6 +1150,7 @@ def main(max_iter=120):
     if not assessment_mode and is_test_area(t):
         print("UNREQUESTED-ASSESSMENT-TAB — request assessment mode explicitly; stopping")
         sys.exit(6)
+    t = GuardedTab(t, assessment_mode)
     if not ensure_session(t, assessment_locked=assessment_mode):
         print("LOGIN-FAIL")
         sys.exit(4)

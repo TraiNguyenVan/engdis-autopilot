@@ -44,7 +44,8 @@ class TestAnswerGuard(unittest.TestCase):
 
         state = {'unit': 'Unit 1', 'lesson': 'L', 'step': 'Test',
                  'counter': '1', 'total': '2', 'body': ''}
-        with patch.object(auto.edlib, 'tab', return_value=Tab()), \
+        with patch.object(auto, 'GuardedTab', new=lambda tab, assessment_mode: tab), \
+             patch.object(auto.edlib, 'tab', return_value=Tab()), \
              patch.object(auto.login, 'ensure_login', return_value=True), \
              patch.object(auto, 'st', return_value=state), \
              patch.object(auto, 'update_live_status'), \
