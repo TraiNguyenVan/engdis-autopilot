@@ -206,8 +206,8 @@ def next_intro_attempt(tries, key, limit=3):
 _ORIG_EDLIB_TAB = edlib.tab
 
 IS_TEST_AREA_JS = """(() => {
-    if (document.querySelectorAll('ed-la-dropdownlist').length > 0) return false;
     if (/TestArea\\.html/i.test(window.location?.href || '')) return true;
+    if (document.querySelectorAll('ed-la-dropdownlist').length > 0) return false;
     if (document.querySelector('#learning__tasksNav_submitTest')) return true;
     const app = window.ng?.probe?.(document.querySelector('app'))?.componentInstance;
     return Boolean(app?.isTestEnv);
@@ -1069,7 +1069,10 @@ def require_lesson_complete(t, timeout=12.0, interval=1.0):
 
 def main(max_iter=120):
     t = select_target_tab()
-    assessment_mode = os.environ.get("ED_ASSESSMENT") == "1" or "--assessment" in sys.argv or is_test_area(t)
+    assessment_mode = os.environ.get("ED_ASSESSMENT") == "1" or "--assessment" in sys.argv
+    if not assessment_mode and is_test_area(t):
+        print("UNREQUESTED-ASSESSMENT-TAB — request assessment mode explicitly; stopping")
+        sys.exit(6)
     if not ensure_session(t, assessment_locked=assessment_mode):
         print("LOGIN-FAIL")
         sys.exit(4)
@@ -1089,9 +1092,10 @@ def main(max_iter=120):
     for _ in range(max_iter):
         s = st(t)
         cur_test_area = is_test_area(t)
-        if cur_test_area:
-            assessment_mode = True
-        elif assessment_mode:
+        if cur_test_area and not assessment_mode:
+            print("UNREQUESTED-ASSESSMENT-TAB — request assessment mode explicitly; stopping")
+            sys.exit(6)
+        elif not cur_test_area and assessment_mode:
             print("ASSESSMENT-TAB-LOST — left TestArea.html; stopping without touching other views")
             sys.exit(6)
         if "Member Login" in (s.get("body") or ""):

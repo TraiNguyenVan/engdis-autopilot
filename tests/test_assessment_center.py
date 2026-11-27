@@ -147,6 +147,45 @@ class TargetTabAndSessionTests(unittest.TestCase):
         edlib_tab_fn.assert_called_once_with()
         urlopen_fn.assert_not_called()
 
+    def test_default_run_refuses_exam_when_it_is_the_only_page(self):
+        target = {"type": "page", "url": "https://ed22.engdis.com/Runtime/TestArea.html",
+                  "webSocketDebuggerUrl": "ws://127.0.0.1:9999/devtools/page/exam"}
+        tab = Mock()
+        tab.js.side_effect = lambda expr: expr in (auto.IS_TEST_AREA_JS, auto.IS_LIVE_ASSESSMENT_SESSION_JS)
+        with patch.dict(os.environ, {"ED_ASSESSMENT": ""}), \
+             patch.object(auto.sys, "argv", ["auto.py"]), \
+             patch.object(auto.edlib.driver.urllib.request, "urlopen", return_value=io.StringIO(json.dumps([target]))), \
+             patch.object(auto.edlib.driver, "Tab", return_value=tab), \
+             patch.object(auto.login, "ensure_login") as login_mock, \
+             patch.object(auto, "st") as state_mock:
+            with self.assertRaises(SystemExit) as ctx:
+                auto.main(max_iter=0)
+        self.assertEqual(ctx.exception.code, 6)
+        login_mock.assert_not_called()
+        state_mock.assert_not_called()
+
+    def test_default_run_stops_if_tab_changes_to_assessment(self):
+        tab = Mock()
+        checks = iter([False, True])
+        tab.js.side_effect = lambda expr: next(checks) if expr == auto.IS_TEST_AREA_JS else False
+        state = {"unit": "", "lesson": "", "step": "", "counter": None, "total": None, "body": ""}
+        with patch.dict(os.environ, {"ED_ASSESSMENT": ""}), \
+             patch.object(auto.sys, "argv", ["auto.py"]), \
+             patch.object(auto.edlib, "tab", return_value=tab), \
+             patch.object(auto, "ensure_session", return_value=True), \
+             patch.object(auto, "st", return_value=state), \
+             patch.object(auto, "update_live_status", side_effect=AssertionError("entered assessment without explicit mode")) as status_mock:
+            with self.assertRaises(SystemExit) as ctx:
+                auto.main(max_iter=1)
+        self.assertEqual(ctx.exception.code, 6)
+        status_mock.assert_not_called()
+
+    def test_testarea_url_remains_assessment_when_dropdowns_are_present(self):
+        result = run_node_js(auto.IS_TEST_AREA_JS,
+                             url="https://ed22.engdis.com/Runtime/TestArea.html",
+                             lists={"ed-la-dropdownlist": [{}, {}]})["res"]
+        self.assertTrue(result)
+
     def test_select_target_tab_prefers_testarea_tab_over_learningarea_when_requested(self):
         fake_targets = [
             {
@@ -230,6 +269,7 @@ class TargetTabAndSessionTests(unittest.TestCase):
             self.assertFalse(auto.ensure_session(tab_dead, assessment_locked=True))
         login_mock.assert_not_called()
 
+    @patch.dict(os.environ, {"ED_ASSESSMENT": "1"})
     def test_main_stops_immediately_if_assessment_tab_leaves_testarea(self):
         test_area_checks = iter([True, False])
 
@@ -363,6 +403,7 @@ class TestIntroHandlingTests(unittest.TestCase):
         self.assertEqual(out_non_intro["res"], 0)
         self.assertEqual(out_non_intro["selectedChanged"], [])
 
+    @patch.dict(os.environ, {"ED_ASSESSMENT": "1"})
     def test_main_advances_past_testintronode_without_calling_handle_test(self):
         class Tab:
             def js(self, expr):
@@ -425,6 +466,7 @@ class TestIntroHandlingTests(unittest.TestCase):
         out = run_node_js(step_js, nodes={"app": app_node})
         self.assertEqual(out["res"], "TestIntroNode")
 
+    @patch.dict(os.environ, {"ED_ASSESSMENT": "1"})
     def test_failed_test_intro_does_not_reset_prev_stall_detector(self):
         class Tab:
             def js(self, expr):
@@ -557,6 +599,7 @@ class MultiPartProgressionTests(unittest.TestCase):
         with patch.object(auto.poll, "wait_until", return_value="moved-sig"):
             self.assertTrue(auto.advance_next_part(tab))
 
+    @patch.dict(os.environ, {"ED_ASSESSMENT": "1"})
     def test_main_calls_advance_next_part_at_part_boundary_10_of_30(self):
         class Tab:
             def js(self, expr):
@@ -860,6 +903,7 @@ class UnansweredAndPreSubmitGateTests(unittest.TestCase):
 
 @unittest.skipUnless(NODE_BIN, "node required for JS evaluation tests")
 class AssessmentScoreAndSectionTransitionTests(unittest.TestCase):
+    @patch.dict(os.environ, {"ED_ASSESSMENT": "1"})
     def test_failed_submission_stops_immediately_without_repeating_or_forging_progress(self):
         executed = []
 
@@ -1076,6 +1120,7 @@ class AssessmentScoreAndSectionTransitionTests(unittest.TestCase):
         )["res"]
         self.assertFalse(out_unknown_idx)
 
+    @patch.dict(os.environ, {"ED_ASSESSMENT": "1"})
     def test_main_fails_closed_on_testarea_score_screen_when_nav_state_is_missing(self):
         body = "Your score is 90%."
 
@@ -1112,6 +1157,7 @@ class AssessmentScoreAndSectionTransitionTests(unittest.TestCase):
         self.assertEqual(ctx.exception.code, 6)
         self.assertIn("lacks verified final completion state", err.getvalue())
 
+    @patch.dict(os.environ, {"ED_ASSESSMENT": "1"})
     def test_main_exits_zero_on_verified_final_testarea_score_screen(self):
         class Tab:
             def js(self, expr):
@@ -1146,6 +1192,7 @@ class AssessmentScoreAndSectionTransitionTests(unittest.TestCase):
         req_mock.assert_not_called()
         self.assertIn("Your score is 100%.", buf.getvalue())
 
+    @patch.dict(os.environ, {"ED_ASSESSMENT": "1"})
     def test_main_continues_to_next_section_after_verified_section_submit_and_exits_after_final(self):
         nav_sigs = iter(["sec1-q30", "sec2-q1", "sec2-q20"])
         post_bodies = iter([
