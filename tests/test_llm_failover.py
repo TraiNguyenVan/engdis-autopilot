@@ -399,7 +399,16 @@ class ResolverTimeoutTests(unittest.TestCase):
 
 
 class TruncatedResponseTests(unittest.TestCase):
+    def test_truncated_sse_fixture_ignores_proxy_with_empty_no_proxy(self):
+        env = {"HTTP_PROXY": "http://127.0.0.1:9", "http_proxy": "http://127.0.0.1:9",
+               "NO_PROXY": "", "no_proxy": ""}
+        with patch.dict(os.environ, env), patch.object(solver.time, "sleep"):
+            self._check_truncated_length_delimited_sse_fails_over()
+
     def test_truncated_length_delimited_sse_fails_over(self):
+        self._check_truncated_length_delimited_sse_fails_over()
+
+    def _check_truncated_length_delimited_sse_fails_over(self):
         seen_models = []
 
         class Handler(http.server.BaseHTTPRequestHandler):
@@ -427,7 +436,8 @@ class TruncatedResponseTests(unittest.TestCase):
         thread = threading.Thread(target=server.serve_forever, daemon=True)
         thread.start()
         try:
-            with patch.object(solver, "LLM_URL", f"http://127.0.0.1:{server.server_port}/"), \
+            with patch.dict(os.environ, {"NO_PROXY": "127.0.0.1", "no_proxy": "127.0.0.1"}), \
+                 patch.object(solver, "LLM_URL", f"http://127.0.0.1:{server.server_port}/"), \
                  patch.object(solver, "LLM_MODELS", ["first", "second"]), \
                  patch.object(solver, "LLM_TIMEOUT", 1), \
                  patch.object(solver, "LLM_KEY", ""), \
@@ -540,7 +550,8 @@ class TotalDeadlineStreamingTests(unittest.TestCase):
         try:
             url = f"http://127.0.0.1:{server.server_port}/v1/chat/completions"
             start = time.monotonic()
-            with patch.object(solver, "LLM_URL", url), \
+            with patch.dict(os.environ, {"NO_PROXY": "127.0.0.1", "no_proxy": "127.0.0.1"}), \
+                 patch.object(solver, "LLM_URL", url), \
                  patch.object(solver, "LLM_MODELS", ["slow-model", "fast-model"]), \
                  patch.object(solver, "LLM_TIMEOUT", 1), \
                  patch.object(solver, "LLM_KEY", ""), \
