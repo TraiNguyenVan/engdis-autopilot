@@ -40,7 +40,7 @@ class AttachTranscriptTests(unittest.TestCase):
              patch.object(solver, "media_url", return_value="https://cdn.example.com/audio/clip1.mp3"), \
              patch.object(solver, "transcript_for", return_value="Actual spoken words") as mock_tr:
             out = solver.attach_transcript(tab, prompt)
-        mock_tr.assert_called_once_with("https://cdn.example.com/audio/clip1.mp3", "clip1_mp3")
+        mock_tr.assert_called_once_with("https://cdn.example.com/audio/clip1.mp3", solver._media_cache_key("https://cdn.example.com/audio/clip1.mp3"))
         self.assertIn("AUDIO TRANSCRIPT:\nActual spoken words", out)
 
     def test_does_not_skip_when_marker_has_empty_content(self):
@@ -79,12 +79,11 @@ class AttachTranscriptTests(unittest.TestCase):
              patch.object(solver, "media_url", return_value="https://cdn.example.com/audio/clip123.mp3?v=1"), \
              patch.object(solver, "transcript_for", return_value="Transcribed audio text") as mock_tr:
             out = solver.attach_transcript(tab, "Prompt")
-        mock_tr.assert_called_once_with("https://cdn.example.com/audio/clip123.mp3?v=1", "clip123_mp3")
+        mock_tr.assert_called_once_with("https://cdn.example.com/audio/clip123.mp3?v=1", solver._media_cache_key("https://cdn.example.com/audio/clip123.mp3?v=1"))
         self.assertIn("AUDIO TRANSCRIPT:\nTranscribed audio text", out)
 
     def test_mp3_and_mp4_with_same_stem_get_distinct_cache_keys(self):
-        self.assertEqual(solver._media_cache_key("https://cdn.example.com/a/clip.mp3?v=1"), "clip_mp3")
-        self.assertEqual(solver._media_cache_key("https://cdn.example.com/v/clip.mp4?v=1"), "clip_mp4")
+        self.assertEqual(solver._media_cache_key("https://cdn.example.com/a/clip.mp3?v=1"), solver._media_cache_key("https://cdn.example.com/a/clip.mp3?v=1#part"))
         self.assertNotEqual(
             solver._media_cache_key("https://cdn.example.com/a/clip.mp3"),
             solver._media_cache_key("https://cdn.example.com/v/clip.mp4"),
@@ -125,6 +124,102 @@ class AttachTranscriptTests(unittest.TestCase):
         self.assertEqual(out, "Prompt")
 
 
+class TranscriptIdentityRegressionTests(unittest.TestCase):
+    def test_fragment_does_not_change_media_type(self):
+        class Response:
+            def __enter__(self): return self
+            def __exit__(self, *args): pass
+            def read(self): return b"video"
+        with tempfile.TemporaryDirectory() as tmp, \
+             patch.object(solver, "SCRATCH", tmp), \
+             patch.object(solver.urllib.request, "urlopen", return_value=Response()), \
+             patch.object(solver, "transcribe_groq", return_value="text") as stt:
+            solver.transcript_for("https://cdn.example.com/clip.mp4#time=1", "ignored")
+            self.assertTrue(stt.call_args.args[0].endswith(".mp4"))
+
+    def test_failed_download_cannot_be_transcribed_as_cached_media_on_retry(self):
+        class BrokenResponse:
+            def __enter__(self): return self
+            def __exit__(self, *args): pass
+            def read(self): raise OSError("interrupted")
+        with tempfile.TemporaryDirectory() as tmp, \
+             patch.object(solver, "SCRATCH", tmp), \
+             patch.object(solver.urllib.request, "urlopen", return_value=BrokenResponse()), \
+             patch.object(solver, "transcribe_groq", return_value="wrong") as stt, \
+             patch("builtins.print"):
+            self.assertEqual(solver.transcript_for("https://cdn.example.com/a.mp3", "a_mp3"), "")
+            stt.assert_not_called()
+            self.assertEqual(os.listdir(tmp), [])
+
+    def test_query_is_part_of_identity_and_paths_never_contain_url_secrets(self):
+        a = "https://user:pass@cdn.example.com/path/clip.mp3?token=secret1"
+        b = "https://user:pass@cdn.example.com/path/clip.mp3?token=secret2"
+        self.assertNotEqual(solver._media_cache_key(a), solver._media_cache_key(b))
+        self.assertRegex(solver._media_cache_key(a), r"^[0-9a-f]{64}$")
+
+    def test_explicitly_migrated_legacy_transcript_is_reused_only_for_target_url(self):
+        first = "https://cdn.example.com/one/clip.mp3?token=secret"
+        second = "https://cdn.example.com/two/clip.mp3?token=secret"
+        with tempfile.TemporaryDirectory() as tmp:
+            old = os.path.join(tmp, "tr_clip.mp3.txt")
+            with open(old, "w") as f:
+                f.write("verified old transcript")
+            with patch.object(solver, "SCRATCH", tmp), \
+                 patch.object(solver.urllib.request, "urlopen", side_effect=OSError("offline")), \
+                 patch("builtins.print"):
+                solver.migrate_legacy_transcript(first, old)
+                self.assertEqual(solver.transcript_for(first, "clip_mp3"), "verified old transcript")
+                self.assertEqual(solver.transcript_for(second, "clip_mp3"), "")
+                with self.assertRaises(FileExistsError):
+                    solver.migrate_legacy_transcript(first, old)
+            with open(old) as f:
+                self.assertEqual(f.read(), "verified old transcript")
+
+    def test_download_error_does_not_log_url_or_exception_secrets(self):
+        url = "https://user:pass@cdn.example.com/private/clip.mp3?token=secret"
+        with tempfile.TemporaryDirectory() as tmp, \
+             patch.object(solver, "SCRATCH", tmp), \
+             patch.object(solver.urllib.request, "urlopen", side_effect=OSError(url)), \
+             patch("builtins.print") as printer:
+            self.assertEqual(solver.transcript_for(url, "../../escape"), "")
+            logs = " ".join(str(call) for call in printer.call_args_list)
+            self.assertNotIn("secret", logs)
+            self.assertNotIn("pass", logs)
+            self.assertNotIn("/private/", logs)
+
+    def test_legacy_name_only_transcript_is_not_reused_for_other_paths(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            with open(os.path.join(tmp, "tr_clip.mp3.txt"), "w") as f:
+                f.write("wrong old transcript")
+            with patch.object(solver, "SCRATCH", tmp), \
+                 patch.object(solver.urllib.request, "urlopen", side_effect=OSError("offline")), \
+                 patch("builtins.print"):
+                result = solver.transcript_for("https://cdn.example.com/two/clip.mp3", "clip_mp3")
+            self.assertEqual(result, "")
+
+    def test_distinct_paths_with_same_filename_never_reuse_transcript_or_media(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            urls = ["https://cdn.example.com/one/clip.mp3", "https://cdn.example.com/two/clip.mp3"]
+            class Response:
+                def __init__(self, data): self.data = data
+                def __enter__(self): return self
+                def __exit__(self, *args): pass
+                def read(self): return self.data
+            def download(req, timeout):
+                return Response(b"first" if req.full_url == urls[0] else b"second")
+            def transcribe(path):
+                with open(path, "rb") as f:
+                    return f.read().decode()
+            with patch.object(solver, "SCRATCH", tmp), \
+                 patch.object(solver.urllib.request, "urlopen", side_effect=download) as opener, \
+                 patch.object(solver, "transcribe_groq", side_effect=transcribe):
+                first = solver.transcript_for(urls[0], solver._media_cache_key(urls[0]))
+                second = solver.transcript_for(urls[1], solver._media_cache_key(urls[1]))
+                again = solver.transcript_for(urls[0], solver._media_cache_key(urls[0]))
+            self.assertEqual((first, second, again), ("first", "second", "first"))
+            self.assertEqual(opener.call_count, 2)
+
+
 class TranscriptCacheCompatibilityTests(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.mkdtemp(prefix="ed-tr-cache-")
@@ -133,9 +228,11 @@ class TranscriptCacheCompatibilityTests(unittest.TestCase):
         shutil.rmtree(self.tmp, ignore_errors=True)
 
     def test_reads_media_distinguishing_cache_without_download(self):
-        with open(os.path.join(self.tmp, "tr_clip99_mp3.txt"), "w", encoding="utf-8") as f:
+        url_mp3 = "https://cdn.example.com/a/clip99.mp3?token=1"
+        url_mp4 = "https://cdn.example.com/v/clip99.mp4?token=1"
+        with open(os.path.join(self.tmp, f"tr_{solver._media_cache_key(url_mp3)}.txt"), "w", encoding="utf-8") as f:
             f.write("Cached mp3 transcript")
-        with open(os.path.join(self.tmp, "tr_clip99_mp4.txt"), "w", encoding="utf-8") as f:
+        with open(os.path.join(self.tmp, f"tr_{solver._media_cache_key(url_mp4)}.txt"), "w", encoding="utf-8") as f:
             f.write("Cached mp4 transcript")
         with patch.object(solver, "SCRATCH", self.tmp), \
              patch.object(solver.urllib.request, "urlopen") as mock_open:
@@ -145,13 +242,14 @@ class TranscriptCacheCompatibilityTests(unittest.TestCase):
         self.assertEqual(out_mp4, "Cached mp4 transcript")
         mock_open.assert_not_called()
 
-    def test_reads_verified_legacy_extensionless_cache_without_download(self):
+    def test_migrates_legacy_extensionless_cache_without_download(self):
         with open(os.path.join(self.tmp, "tr_clip99.txt"), "w", encoding="utf-8") as f:
             f.write("Cached stem transcript")
         with open(os.path.join(self.tmp, "m_clip99.mp3"), "wb") as f:
             f.write(b"mp3data")
         with patch.object(solver, "SCRATCH", self.tmp), \
              patch.object(solver.urllib.request, "urlopen") as mock_open:
+            solver.migrate_legacy_transcript("https://cdn.example.com/a/clip99.mp3?token=1", os.path.join(self.tmp, "tr_clip99.txt"))
             out = solver.transcript_for("https://cdn.example.com/a/clip99.mp3?token=1", "clip99_mp3")
         self.assertEqual(out, "Cached stem transcript")
         mock_open.assert_not_called()
@@ -174,11 +272,12 @@ class TranscriptCacheCompatibilityTests(unittest.TestCase):
             out = solver.transcript_for("https://cdn.example.com/a/clip99.mp3", "clip99_mp3")
         self.assertEqual(out, "")
 
-    def test_reads_legacy_filename_with_extension_cache_without_download(self):
+    def test_migrates_legacy_filename_with_extension_cache_without_download(self):
         with open(os.path.join(self.tmp, "tr_clip99.mp3.txt"), "w", encoding="utf-8") as f:
             f.write("Cached legacy ext transcript")
         with patch.object(solver, "SCRATCH", self.tmp), \
              patch.object(solver.urllib.request, "urlopen") as mock_open:
+            solver.migrate_legacy_transcript("https://cdn.example.com/a/clip99.mp3?token=1", os.path.join(self.tmp, "tr_clip99.mp3.txt"))
             out = solver.transcript_for("https://cdn.example.com/a/clip99.mp3?token=1", "clip99_mp3")
         self.assertEqual(out, "Cached legacy ext transcript")
         mock_open.assert_not_called()
@@ -218,7 +317,7 @@ class AutoTranscriptIntegrationTests(unittest.TestCase):
              patch.object(auto, "st", return_value={"total": "2", "counter": "1"}):
             res = auto.handle_test(tab, "Read the transcript prompt")
         mock_url.assert_called_once_with(tab, prefer_last=True)
-        mock_tr.assert_called_once_with("https://cdn.example.com/v/vid.mp4", "vid_mp4")
+        mock_tr.assert_called_once_with("https://cdn.example.com/v/vid.mp4", solver._media_cache_key("https://cdn.example.com/v/vid.mp4"))
         self.assertEqual(res, "mcq: 1/1")
         self.assertEqual(len(seen), 1)
         self.assertIn("AUDIO TRANSCRIPT:\nASR test audio", seen[0])

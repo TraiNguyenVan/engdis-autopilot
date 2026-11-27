@@ -294,7 +294,7 @@ class TranscriptForTests(unittest.TestCase):
         out, _c, _a, _r = self._call(
             "https://cdn.example.com/audio/clip.mp4", [_Resp(b"MEDIADATA")], groq="t"
         )
-        media = os.path.join(self.tmp, "m_k1.mp4")
+        media = os.path.join(self.tmp, f"m_{solver._media_cache_key('https://cdn.example.com/audio/clip.mp4')}.mp4")
         with open(media, "rb") as f:
             self.assertEqual((out, f.read()), ("t", b"MEDIADATA"))
 
@@ -309,13 +309,13 @@ class TranscriptForTests(unittest.TestCase):
             "https://cdn.example.com/audio/CLIP.MP4?token=abc123",
             [_Resp(b"MEDIADATA")], groq="t",
         )
-        self.assertTrue(os.path.exists(os.path.join(self.tmp, "m_k1.mp4")))
+        self.assertTrue(os.path.exists(os.path.join(self.tmp, f"m_{solver._media_cache_key('https://cdn.example.com/audio/CLIP.MP4?token=abc123')}.mp4")))
 
     def test_unknown_extension_falls_back_to_mp3_media_file(self):
         _o, _c, _a, _r = self._call(
             "https://cdn.example.com/stream?id=9", [_Resp(b"MEDIADATA")], groq="t"
         )
-        self.assertTrue(os.path.exists(os.path.join(self.tmp, "m_k1.mp3")))
+        self.assertTrue(os.path.exists(os.path.join(self.tmp, f"m_{solver._media_cache_key('https://cdn.example.com/stream?id=9')}.mp3")))
 
     def test_download_request_uses_browser_user_agent(self):
         _o, calls, _a, _r = self._call(
@@ -339,7 +339,7 @@ class TranscriptForTests(unittest.TestCase):
                          ("spoken", expected))
 
     def test_transcript_is_cached_and_reused_without_refetching(self):
-        path = os.path.join(self.tmp, "tr_k1.txt")
+        path = os.path.join(self.tmp, f"tr_{solver._media_cache_key('https://cdn.example.com/clip.mp4')}.txt")
         with open(path, "w", encoding="utf-8") as f:
             f.write("cached text")
         out, calls, _a, _r = self._call(
@@ -349,7 +349,7 @@ class TranscriptForTests(unittest.TestCase):
 
     def test_groq_transcript_is_persisted_to_cache_file(self):
         self._call("https://cdn.example.com/clip.mp4", [_Resp(b"MEDIADATA")], groq="hi there")
-        path = os.path.join(self.tmp, "tr_k1.txt")
+        path = os.path.join(self.tmp, f"tr_{solver._media_cache_key('https://cdn.example.com/clip.mp4')}.txt")
         with open(path, encoding="utf-8") as f:
             self.assertEqual(f.read(), "hi there")
 

@@ -3,7 +3,7 @@
 Drives own headless Chromium over CDP; answers via a cheap remote LLM.
 Prints one terse line per task.
 """
-import base64, json, os, subprocess, sys, time, urllib.request
+import base64, hashlib, json, os, subprocess, sys, tempfile, time, urllib.request
 
 import edlib
 import config
@@ -217,12 +217,8 @@ def _format_transcript_block(text: str) -> str:
 
 
 def _media_cache_key(url: str) -> str:
-    """Media-distinguishing cache key (stem_ext) without double extensions."""
-    fname = (url or "").split("?", 1)[0].rsplit("/", 1)[-1]
-    stem, dot, ext = fname.rpartition(".")
-    if dot and stem and ext:
-        return f"{stem}_{ext.lower()}"
-    return fname
+    """Identify the full media URL without exposing credentials in cache names."""
+    return hashlib.sha256(url.split("#", 1)[0].encode("utf-8")).hexdigest()
 
 
 def attach_transcript(t, src, label="--", prefer_last_media=False):
@@ -238,9 +234,9 @@ def attach_transcript(t, src, label="--", prefer_last_media=False):
         key = _media_cache_key(u)
         try:
             tr = transcript_for(u, key)
-        except Exception as e:
+        except Exception:
             tr = ""
-            print(f"! transcript {key}: {str(e)[:140]}", flush=True)
+            print(f"! transcript {key}: unavailable", flush=True)
         if tr:
             print(f"{label} transcript {key} ({len(tr)} chars)", flush=True)
             return (src or "") + "\n\n" + _format_transcript_block(tr)
@@ -369,48 +365,58 @@ def transcribe_groq(media_path: str) -> str:
     return ""
 
 
+def migrate_legacy_transcript(url, legacy_path):
+    """Copy a manually verified transcript to its URL-specific cache entry.
+
+    The caller must establish provenance; legacy filenames do not prove it.
+    Never overwrite an existing entry or remove the original.
+    """
+    with open(legacy_path, encoding="utf-8") as f:
+        text = f.read()
+    os.makedirs(SCRATCH, exist_ok=True)
+    destination = os.path.join(SCRATCH, f"tr_{_media_cache_key(url)}.txt")
+    with open(destination, "x", encoding="utf-8") as f:
+        f.write(text)
+
+
 def transcript_for(url, cache_key):
     os.makedirs(SCRATCH, exist_ok=True)
+    # The caller's legacy key is not an identity; never trust it for disk access.
+    cache_key = _media_cache_key(url)
     path = os.path.join(SCRATCH, f"tr_{cache_key}.txt")
     if os.path.exists(path):
         with open(path, encoding="utf-8") as f:
             return f.read()
     # Extract file extension from URL
     ext = ".mp3"
-    clean_url = url.split("?")[0].lower()
+    clean_url = url.split("#", 1)[0].split("?", 1)[0].lower()
     for e in [".mp4", ".m4a", ".wav", ".webm", ".mp3"]:
         if clean_url.endswith(e):
             ext = e
             break
 
-    fname = (url or "").split("?", 1)[0].rsplit("/", 1)[-1]
-    stem, dot, _ext = fname.rpartition(".")
-    if fname and fname != cache_key:
-        legacy_path = os.path.join(SCRATCH, f"tr_{fname}.txt")
-        if os.path.exists(legacy_path):
-            with open(legacy_path, encoding="utf-8") as f:
-                return f.read()
-    if dot and stem and stem != cache_key:
-        legacy_stem_path = os.path.join(SCRATCH, f"tr_{stem}.txt")
-        if os.path.exists(legacy_stem_path):
-            expected_media = os.path.join(SCRATCH, f"m_{stem}{ext}")
-            conflicting = any(
-                e != ext and os.path.exists(os.path.join(SCRATCH, f"m_{stem}{e}"))
-                for e in (".mp4", ".m4a", ".wav", ".webm", ".mp3")
-            )
-            if os.path.exists(expected_media) and not conflicting:
-                with open(legacy_stem_path, encoding="utf-8") as f:
-                    return f.read()
+    # Name-only legacy transcripts and media have no path provenance; leave them
+    # untouched, but do not guess that they belong to this URL.
 
     media_file = os.path.join(SCRATCH, f"m_{cache_key}{ext}")
     if not os.path.exists(media_file):
+        temp_path = None
         try:
             req = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0"})
             with urllib.request.urlopen(req, timeout=30) as resp:
-                with open(media_file, "wb") as f:
-                    f.write(resp.read())
-        except Exception as e:
-            print(f"! failed to download media {url}: {e}", flush=True)
+                data = resp.read()
+            with tempfile.NamedTemporaryFile(dir=SCRATCH, prefix=".media-", delete=False) as f:
+                temp_path = f.name
+                f.write(data)
+            os.replace(temp_path, media_file)
+        except Exception:
+            if temp_path:
+                try:
+                    os.unlink(temp_path)
+                except OSError:
+                    pass
+            print(f"! failed to download media {cache_key}", flush=True)
+            return ""
 
     if not os.path.exists(media_file):
         return ""
