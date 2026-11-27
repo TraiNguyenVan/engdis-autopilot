@@ -646,11 +646,13 @@ def is_solver_failure_result(result):
 
 
 def select_target_tab(port=None):
-    """Prefer an open Assessment Center (`TestArea.html`) tab over lesson/home tabs."""
+    """Select an Assessment Center (`TestArea.html`) tab when assessment mode is requested; otherwise use `edlib.tab()`."""
     want_assessment = os.environ.get("ED_ASSESSMENT") == "1" or "--assessment" in sys.argv
+    if not want_assessment:
+        return edlib.tab()
     if edlib.tab is not _ORIG_EDLIB_TAB:
         t = edlib.tab()
-        if want_assessment and not is_test_area(t):
+        if not is_test_area(t):
             print("NO-ASSESSMENT-TAB — expected TestArea.html target")
             sys.exit(6)
         return t
@@ -668,10 +670,8 @@ def select_target_tab(port=None):
         for method in ("Page.enable", "Runtime.enable", "Network.enable"):
             tab.send(method)
         return tab
-    if want_assessment:
-        print("NO-ASSESSMENT-TAB — open TestArea.html before running auto.py in assessment mode")
-        sys.exit(6)
-    return edlib.tab()
+    print("NO-ASSESSMENT-TAB — open TestArea.html before running auto.py in assessment mode")
+    sys.exit(6)
 
 
 def ensure_session(t, assessment_locked=False):

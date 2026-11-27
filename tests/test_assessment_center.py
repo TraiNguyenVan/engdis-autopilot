@@ -135,7 +135,19 @@ def run_q_js(body_expr, **kwargs):
 
 @unittest.skipUnless(NODE_BIN, "node required for JS evaluation tests")
 class TargetTabAndSessionTests(unittest.TestCase):
-    def test_select_target_tab_prefers_testarea_tab_over_learningarea(self):
+    def test_select_target_tab_default_mode_uses_edlib_tab_even_when_testarea_open(self):
+        default_tab = Mock()
+        with patch.dict(os.environ, {"ED_ASSESSMENT": ""}), \
+             patch.object(auto.sys, "argv", ["auto.py"]), \
+             patch.object(auto.edlib, "tab", return_value=default_tab) as edlib_tab_fn, \
+             patch.object(auto.edlib.driver.urllib.request, "urlopen") as urlopen_fn:
+            picked = auto.select_target_tab(port=9999)
+
+        self.assertIs(picked, default_tab)
+        edlib_tab_fn.assert_called_once_with()
+        urlopen_fn.assert_not_called()
+
+    def test_select_target_tab_prefers_testarea_tab_over_learningarea_when_requested(self):
         fake_targets = [
             {
                 "type": "page",
@@ -150,7 +162,8 @@ class TargetTabAndSessionTests(unittest.TestCase):
         ]
         resp = io.StringIO(json.dumps(fake_targets))
         fake_tab = Mock()
-        with patch.object(auto.edlib.driver.urllib.request, "urlopen", return_value=resp), \
+        with patch.dict(os.environ, {"ED_ASSESSMENT": "1"}), \
+             patch.object(auto.edlib.driver.urllib.request, "urlopen", return_value=resp), \
              patch.object(auto.edlib.driver, "Tab", return_value=fake_tab) as tab_cls:
             picked = auto.select_target_tab(port=9999)
 
