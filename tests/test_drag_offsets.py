@@ -1,10 +1,11 @@
-"""Offline unit tests for solve_drag drop retry offsets, scroll recheck, and word-bank exclusion."""
+"""Offline unit tests for solve_drag drop retry offsets, scroll/clip visibility, and word-bank exclusion."""
 import json
 import shutil
 import subprocess
 import unittest
 from unittest.mock import Mock, patch
 
+import auto
 import edlib
 import solver
 
@@ -17,6 +18,13 @@ def _eval_js_in_node(harness_js, expr_js):
     script = f"{harness_js}\nconst __res = {expr_js};\nprocess.stdout.write(JSON.stringify(__res));\n"
     proc = subprocess.run([node, "-e", script], capture_output=True, text=True, timeout=10, check=True)
     return json.loads(proc.stdout)
+
+
+def _capture_scroll_js(dx=0, dy=0):
+    tab = Mock()
+    tab.js.return_value = None
+    solver._scroll_drag_into_view(tab, '.dndZone[dg_name="0"]', "alpha", dx=dx, dy=dy)
+    return tab.js.call_args.args[0]
 
 
 def _make_drag_tab(snapshot_zones, snapshot_bank, zone_items_state, scroll_meta=None):
@@ -54,10 +62,9 @@ class DragOffsetsAndBankExclusionTests(unittest.TestCase):
             snapshot_zones,
             ["sales force"],
             zone_state,
-            scroll_meta={"scrolled": 0, "w": 142, "h": 28},
+            scroll_meta={"scrolled": 0, "w": 142, "h": 28, "vw": 1280, "vh": 800, "sourceInView": True, "targetInView": True},
         )
 
-        # Source tile (cx=350, cy=643, w=97) sits directly above zones[3] (cx=350, cy=671, w=142).
         rects = {
             "items": [{"t": "sales force", "cx": 350, "cy": 643}],
             "zones": [
@@ -126,9 +133,8 @@ class DragOffsetsAndBankExclusionTests(unittest.TestCase):
             snapshot_zones,
             ["phrase"],
             zone_state,
-            scroll_meta={"scrolled": 0, "w": 120, "h": 14},
+            scroll_meta={"scrolled": 0, "w": 120, "h": 14, "vw": 1280, "vh": 800, "sourceInView": True, "targetInView": True},
         )
-        # Even with a short h=14 zone rect, dy=+8 must NOT be clamped away.
         rects = {
             "items": [{"t": "phrase", "cx": 200, "cy": 100, "w": 80, "h": 24}],
             "zones": [{"n": "0", "id": "", "cx": 200, "cy": 300, "w": 120, "h": 14, "count": 0}],
@@ -219,7 +225,6 @@ class DragOffsetsAndBankExclusionTests(unittest.TestCase):
     def test_id_only_bank_propagated_through_rects_dispatch_and_prefilled_clear(self):
         """Regression test: ID-only bank clears prefilled targets instead of returning 'drag: already' untouched,
         exposes id in edlib.rects(), and routes to 'drag' in do_task()."""
-        # 1. edlib.rects(t) exposes zone id so _is_bank_zone() matches ID-only banks.
         rects_tab = Mock()
         rects_tab.js.return_value = {"items": [], "zones": []}
         edlib.rects(rects_tab)
@@ -244,7 +249,6 @@ class DragOffsetsAndBankExclusionTests(unittest.TestCase):
             self.assertIsNone(bank_rect["n"])
             self.assertEqual(bank_rect["id"], "TTpTablePlaceHolder")
 
-        # 2. do_task() classifier dispatches ID-only bank to solve_drag, not solve_sequence.
         dispatch_scripts = []
         dispatch_tab = Mock()
 
@@ -274,7 +278,7 @@ class DragOffsetsAndBankExclusionTests(unittest.TestCase):
         mock_seq.assert_not_called()
         self.assertIn("#TTpTablePlaceHolder", dispatch_scripts[1])
 
-        # 3. Prefilled target with ID-only bank clears wrong item to bank and solves, NEVER returning 'drag: already' unmoved.
+        # Prefilled target with ID-only bank clears wrong item to bank and re-drops (preserving 530b138).
         zone_state = {"0": ["wrong"]}
         bank_state = ["correct"]
 
@@ -291,7 +295,7 @@ class DragOffsetsAndBankExclusionTests(unittest.TestCase):
 
         def prefill_js(expr):
             if "scrollIntoView" in expr:
-                return {"scrolled": 0, "w": 120, "h": 28}
+                return {"scrolled": 0, "w": 120, "h": 28, "vw": 1280, "vh": 800, "sourceInView": True, "targetInView": True}
             if "return { zones: zones, bank: bank };" in expr:
                 zs, bk = dynamic_snapshot()
                 return {"zones": zs, "bank": bk}
@@ -337,7 +341,7 @@ class DragOffsetsAndBankExclusionTests(unittest.TestCase):
         self.assertEqual(res, "drag: 0=ok")
         self.assertEqual(zone_state["0"], ["correct"])
 
-        # 4. Even if bank rect is completely missing in rects(), prefilled target must NOT report 'drag: already' without moving.
+        # Missing bank rect must NOT report 'drag: already' without moving, and propagates failure ('other: drag: ...').
         stuck_state = {"0": ["wrong"]}
         tab_no_bank = _make_drag_tab(
             [{"n": "0", "id": "z0", "label": "", "items": ["wrong"]}],
@@ -355,6 +359,7 @@ class DragOffsetsAndBankExclusionTests(unittest.TestCase):
             res_no_bank = solver.solve_drag(tab_no_bank, "ctx")
 
         self.assertNotEqual(res_no_bank, "drag: already")
+        self.assertTrue(res_no_bank.startswith("other: drag:"))
         self.assertTrue(mock_ask.called)
 
     def test_drag_snapshot_checks_both_dg_name_and_id_for_bank(self):
@@ -382,7 +387,7 @@ class DragOffsetsAndBankExclusionTests(unittest.TestCase):
             snapshot_zones,
             ["alpha"],
             zone_state,
-            scroll_meta={"scrolled": 1, "w": 120, "h": 28, "sourceInView": True, "targetInView": True},
+            scroll_meta={"scrolled": 1, "w": 120, "h": 28, "vw": 1024, "vh": 600, "sourceInView": True, "targetInView": True},
         )
         orig_side_effect = tab.js.side_effect
         captured_scroll_js = []
@@ -412,12 +417,7 @@ class DragOffsetsAndBankExclusionTests(unittest.TestCase):
         self.assertIn(0.1, [c.args[0] for c in mock_sleep.call_args_list if c.args])
 
         scroll_expr = captured_scroll_js[0]
-        self.assertIn("sourceInView", scroll_expr)
-        self.assertIn("targetInView", scroll_expr)
-
         if shutil.which("node"):
-            # Case A: z.scrollIntoView over-scrolls (e.g. aligns z near top), pushing source item above y=0,
-            # while both endpoints fit in the 600px viewport when reconciled via window.scrollBy.
             over_scroll_harness = """
               let scrollY = 0;
               const itAbs = { top: 100, height: 30, left: 40, width: 90 };
@@ -435,7 +435,6 @@ class DragOffsetsAndBankExclusionTests(unittest.TestCase):
               const zEl = {
                 parentElement: null,
                 getBoundingClientRect: () => rectOf(zAbs),
-                // Over-scrolls z to y=100, which pushes itEl to y = 100 - 520 = -420 (offscreen!).
                 scrollIntoView: () => { scrollY = zAbs.top - 100; }
               };
               global.window = {
@@ -453,40 +452,278 @@ class DragOffsetsAndBankExclusionTests(unittest.TestCase):
             self.assertTrue(meta_a["sourceInView"])
             self.assertTrue(meta_a["targetInView"])
 
-            # Case B: Source and target are 900px apart (> 600px viewport); z.scrollIntoView moves source offscreen,
-            # recheck brings source endpoint back into view so drag start is not offscreen.
-            far_apart_harness = """
+    def test_initially_reachable_wide_viewport_does_not_scroll_target_offscreen(self):
+        """Regression test (differential follow-up): 1000px viewport with centers at x=10 and x=960
+        must NOT scroll when both centers are already reachable (9684332 moved target to x=1060)."""
+        scroll_expr = _capture_scroll_js(dx=0, dy=0)
+        if shutil.which("node"):
+            wide_harness = """
+              let scrollX = 0;
+              // Source center at x=10 (left=-30, right=50); target center at x=960 (left=890, right=1030).
+              const itAbs = { top: 100, height: 30, left: -30, width: 80 };
+              const zAbs  = { top: 100, height: 30, left: 890, width: 140 };
+              const rectOf = b => ({
+                top: b.top, bottom: b.top + b.height,
+                left: b.left - scrollX, right: b.left + b.width - scrollX,
+                x: b.left - scrollX, y: b.top, width: b.width, height: b.height
+              });
+              const itEl = {
+                innerText: 'alpha', parentElement: null, contains: () => false,
+                getBoundingClientRect: () => rectOf(itAbs),
+                scrollIntoView: () => { scrollX = itAbs.left - 100; }
+              };
+              const zEl = {
+                parentElement: null, contains: () => false,
+                getBoundingClientRect: () => rectOf(zAbs),
+                scrollIntoView: () => { scrollX = zAbs.left + zAbs.width - 1000; }
+              };
+              global.window = {
+                innerHeight: 600, innerWidth: 1000, scrollX: 0, scrollY: 0,
+                scrollBy: (dx, _dy) => { scrollX += dx; global.window.scrollX = scrollX; }
+              };
+              global.document = {
+                body: {}, documentElement: { clientHeight: 600, clientWidth: 1000 },
+                querySelector: () => zEl,
+                querySelectorAll: sel => sel === '.dnditem' ? [itEl] : [],
+                elementFromPoint: (x, y) => {
+                  if (x < 0 || x >= 1000 || y < 0 || y >= 600) return null;
+                  const ir = rectOf(itAbs), zr = rectOf(zAbs);
+                  if (x >= ir.left && x <= ir.right && y >= ir.top && y <= ir.bottom) return itEl;
+                  if (x >= zr.left && x <= zr.right && y >= zr.top && y <= zr.bottom) return zEl;
+                  return global.document.body;
+                }
+              };
+            """
+            meta = _eval_js_in_node(wide_harness + "\nglobal.__getScrollX = () => scrollX;", scroll_expr)
+            self.assertEqual(meta["scrolled"], 0)
+            self.assertTrue(meta["sourceInView"])
+            self.assertTrue(meta["targetInView"])
+
+            # End-to-end solve_drag on this exact 1000px-wide layout succeeds on first drop at x=960.
+            zone_state = {"0": []}
+            tab = _make_drag_tab(
+                [{"n": "0", "id": "", "label": "", "items": []}],
+                ["alpha"],
+                zone_state,
+                scroll_meta=meta,
+            )
+            rects = {
+                "items": [{"t": "alpha", "cx": 10, "cy": 115, "w": 80, "h": 30}],
+                "zones": [{"n": "0", "id": "", "cx": 960, "cy": 115, "w": 140, "h": 30, "count": 0}],
+            }
+            drags = []
+
+            def fake_drag(x1, y1, x2, y2):
+                drags.append((x1, y1, x2, y2))
+                if 0 <= x1 < 1000 and 0 <= x2 < 1000:
+                    zone_state["0"] = ["alpha"]
+
+            tab.drag_xy.side_effect = fake_drag
+            with patch.object(solver, "ask_json", return_value={"map": {"0": "alpha"}}), \
+                 patch.object(solver.edlib, "rects", return_value=rects), \
+                 patch.object(solver.time, "sleep"):
+                res = solver.solve_drag(tab, "ctx")
+
+            self.assertEqual(res, "drag: 0=ok")
+            self.assertEqual(drags, [(10, 115, 960, 115)])
+
+    def test_unreachable_far_apart_target_stops_without_offscreen_drops_and_blocks_test_submit(self):
+        """Regression test: when source (y=40) and target (y=1535) exceed a 380px viewport,
+        solve_drag must NOT attempt 6 offscreen drops and handle_test must NOT submit."""
+        scroll_expr = _capture_scroll_js(dx=0, dy=0)
+        scroll_meta = {
+            "scrolled": 1, "w": 140, "h": 30, "vw": 800, "vh": 380,
+            "sourceInView": True, "targetInView": False, "unreachable": True,
+        }
+        if shutil.which("node"):
+            tall_harness = """
               let scrollY = 0;
-              const itAbs = { top: 50, height: 30, left: 40, width: 90 };
-              const zAbs  = { top: 950, height: 30, left: 40, width: 140 };
+              const itAbs = { top: 25, height: 30, left: 40, width: 90 };
+              const zAbs  = { top: 1520, height: 30, left: 40, width: 140 };
               const rectOf = b => ({
                 top: b.top - scrollY, bottom: b.top + b.height - scrollY,
                 left: b.left, right: b.left + b.width,
                 x: b.left, y: b.top - scrollY, width: b.width, height: b.height
               });
               const itEl = {
-                innerText: 'alpha', parentElement: null,
+                innerText: 'alpha', parentElement: null, contains: () => false,
                 getBoundingClientRect: () => rectOf(itAbs),
-                scrollIntoView: () => { scrollY = Math.max(0, itAbs.top - 20); }
+                scrollIntoView: () => { scrollY = Math.max(0, itAbs.top - 10); }
               };
               const zEl = {
-                parentElement: null,
+                parentElement: null, contains: () => false,
                 getBoundingClientRect: () => rectOf(zAbs),
-                scrollIntoView: () => { scrollY = zAbs.top + zAbs.height - 600; }
+                scrollIntoView: () => { scrollY = zAbs.top + zAbs.height - 380; }
               };
               global.window = {
-                innerHeight: 600, innerWidth: 1024, scrollX: 0, scrollY: 0,
+                innerHeight: 380, innerWidth: 800, scrollX: 0, scrollY: 0,
                 scrollBy: (_dx, dy) => { scrollY += dy; global.window.scrollY = scrollY; }
               };
               global.document = {
-                body: {}, documentElement: { clientHeight: 600, clientWidth: 1024 },
+                body: {}, documentElement: { clientHeight: 380, clientWidth: 800 },
                 querySelector: () => zEl,
                 querySelectorAll: sel => sel === '.dnditem' ? [itEl] : []
               };
             """
-            meta_b = _eval_js_in_node(far_apart_harness, scroll_expr)
-            self.assertEqual(meta_b["scrolled"], 1)
-            self.assertTrue(meta_b["sourceInView"])
+            scroll_meta = _eval_js_in_node(tall_harness, scroll_expr)
+            self.assertTrue(scroll_meta["sourceInView"])
+            self.assertFalse(scroll_meta["targetInView"])
+            self.assertTrue(scroll_meta["unreachable"])
+
+        zone_state = {"0": []}
+        tab = _make_drag_tab(
+            [{"n": "0", "id": "", "label": "", "items": []}],
+            ["alpha"],
+            zone_state,
+            scroll_meta=scroll_meta,
+        )
+        rects = {
+            "items": [{"t": "alpha", "cx": 85, "cy": 40, "w": 90, "h": 30}],
+            "zones": [{"n": "0", "id": "", "cx": 110, "cy": 1535, "w": 140, "h": 30, "count": 0}],
+        }
+
+        with patch.object(solver, "ask_json", return_value={"map": {"0": "alpha"}}), \
+             patch.object(solver.edlib, "rects", return_value=rects), \
+             patch.object(solver.time, "sleep"):
+            drag_out = solver.solve_drag(tab, "ctx")
+
+        self.assertEqual(tab.drag_xy.call_count, 0)
+        self.assertEqual(drag_out, "other: drag: 0=UNREACHABLE")
+
+        # Verify propagation to auto.handle_test submission guard on the final question: must NOT submit!
+        test_tab = Mock()
+        test_tab.js.return_value = ""
+        with patch.object(auto.solver, "dom_transcript", return_value=""), \
+             patch.object(auto.solver, "do_task", return_value=drag_out), \
+             patch.object(auto, "q", side_effect=lambda _t, expr: 0 if ".prMCQ__qaSet" in expr else 1), \
+             patch.object(auto, "click") as mock_click, \
+             patch.object(auto.time, "sleep"), \
+             patch.object(auto, "st", return_value={"total": "2", "counter": "2"}), \
+             patch.object(auto.poll, "wait_until"), \
+             patch("builtins.print"):
+            test_res = auto.handle_test(test_tab, "")
+
+        self.assertTrue(test_res.startswith("test-unanswered:"), test_res)
+        mock_click.assert_not_called()
+
+    def test_ancestor_overflow_clipping_and_hit_visibility_detected(self):
+        """Regression test: element inside viewport bounds but clipped by an overflow ancestor or covered
+        by an overlay must NOT be reported visible; scrollable ancestor must be scrolled into view."""
+        if not shutil.which("node"):
+            self.skipTest("node not installed")
+        scroll_expr = _capture_scroll_js(dx=0, dy=0)
+
+        # Case 1: Target at y=335 inside 800x600 viewport, clipped by overflow:hidden parent (top=50..250).
+        hidden_clip_harness = """
+          const clipBox = {
+            parentElement: null, clientLeft: 0, clientTop: 0, clientWidth: 400, clientHeight: 200,
+            scrollWidth: 400, scrollHeight: 500,
+            style: { overflow: 'hidden', overflowX: 'hidden', overflowY: 'hidden' },
+            getBoundingClientRect: () => ({ left: 20, top: 50, right: 420, bottom: 250, width: 400, height: 200 })
+          };
+          const itEl = {
+            innerText: 'alpha', parentElement: null, contains: () => false, style: {},
+            getBoundingClientRect: () => ({ left: 30, top: 10, right: 110, bottom: 40, x: 30, y: 10, width: 80, height: 30 }),
+            scrollIntoView: () => {}
+          };
+          const zEl = {
+            parentElement: clipBox, contains: () => false, style: {},
+            // y=320..350 is inside window 600px height, YET clipped below clipBox.bottom=250!
+            getBoundingClientRect: () => ({ left: 40, top: 320, right: 180, bottom: 350, x: 40, y: 320, width: 140, height: 30 }),
+            scrollIntoView: () => {}
+          };
+          global.window = {
+            innerHeight: 600, innerWidth: 800,
+            getComputedStyle: el => el.style || {}
+          };
+          global.document = {
+            body: { style: {} }, documentElement: { clientHeight: 600, clientWidth: 800 },
+            querySelector: () => zEl,
+            querySelectorAll: sel => sel === '.dnditem' ? [itEl] : [],
+            elementFromPoint: (x, y) => {
+              if (y >= 10 && y <= 40 && x >= 30 && x <= 110) return itEl;
+              return y < 250 ? clipBox : global.document.body;
+            }
+          };
+        """
+        meta_hidden = _eval_js_in_node(hidden_clip_harness, scroll_expr)
+        self.assertTrue(meta_hidden["sourceInView"])
+        self.assertFalse(meta_hidden["targetInView"])
+        self.assertTrue(meta_hidden["unreachable"])
+
+        # Case 1b: Unclipped target occluded by a covering overlay element via elementFromPoint (with JSDOM-like empty opacity '').
+        overlay_harness = """
+          const overlay = { id: 'modalOverlay', style: { opacity: '' } };
+          const itEl = {
+            innerText: 'alpha', parentElement: null, contains: () => false, style: { opacity: '' },
+            getBoundingClientRect: () => ({ left: 30, top: 10, right: 110, bottom: 40, x: 30, y: 10, width: 80, height: 30 }),
+            scrollIntoView: () => {}
+          };
+          const zEl = {
+            parentElement: null, contains: () => false, style: { opacity: '' },
+            getBoundingClientRect: () => ({ left: 40, top: 120, right: 180, bottom: 150, x: 40, y: 120, width: 140, height: 30 }),
+            scrollIntoView: () => {}
+          };
+          global.window = {
+            innerHeight: 600, innerWidth: 800,
+            getComputedStyle: el => el.style || { opacity: '' }
+          };
+          global.document = {
+            body: { style: { opacity: '' } }, documentElement: { clientHeight: 600, clientWidth: 800 },
+            querySelector: () => zEl,
+            querySelectorAll: sel => sel === '.dnditem' ? [itEl] : [],
+            elementFromPoint: (x, y) => (y >= 10 && y <= 40 && x >= 30 && x <= 110 ? itEl : overlay)
+          };
+        """
+        meta_overlay = _eval_js_in_node(overlay_harness, scroll_expr)
+        self.assertTrue(meta_overlay["sourceInView"])
+        self.assertFalse(meta_overlay["targetInView"])
+
+        # Case 2: Target at y=335 inside scrollable overflow-y:auto container (top=50..250) -> helper scrolls container!
+        scrollable_clip_harness = """
+          let cScrollTop = 0;
+          const scroller = {
+            parentElement: null, clientLeft: 0, clientTop: 0, clientWidth: 400, clientHeight: 200,
+            scrollWidth: 400, scrollHeight: 500,
+            get scrollTop() { return cScrollTop; },
+            set scrollTop(v) { cScrollTop = Math.max(0, Math.min(300, v)); },
+            style: { overflow: 'auto', overflowX: 'visible', overflowY: 'auto' },
+            getBoundingClientRect: () => ({ left: 20, top: 50, right: 420, bottom: 250, width: 400, height: 200 })
+          };
+          const itEl = {
+            innerText: 'alpha', parentElement: null, contains: () => false, style: {},
+            getBoundingClientRect: () => ({ left: 30, top: 10, right: 110, bottom: 40, x: 30, y: 10, width: 80, height: 30 }),
+            scrollIntoView: () => {}
+          };
+          const zEl = {
+            parentElement: scroller, contains: () => false, style: {},
+            getBoundingClientRect: () => {
+              const top = 320 - cScrollTop;
+              return { left: 40, top, right: 180, bottom: top + 30, x: 40, y: top, width: 140, height: 30 };
+            },
+            scrollIntoView: () => { cScrollTop = 100; }
+          };
+          global.window = {
+            innerHeight: 600, innerWidth: 800,
+            getComputedStyle: el => el.style || {}
+          };
+          global.document = {
+            body: { style: {} }, documentElement: { clientHeight: 600, clientWidth: 800 },
+            querySelector: () => zEl,
+            querySelectorAll: sel => sel === '.dnditem' ? [itEl] : [],
+            elementFromPoint: (x, y) => {
+              if (y >= 10 && y <= 40 && x >= 30 && x <= 110) return itEl;
+              const zr = zEl.getBoundingClientRect();
+              if (y >= 50 && y < 250 && y >= zr.top && y <= zr.bottom && x >= zr.left && x <= zr.right) return zEl;
+              return scroller;
+            }
+          };
+        """
+        meta_scrolled = _eval_js_in_node(scrollable_clip_harness, scroll_expr)
+        self.assertEqual(meta_scrolled["scrolled"], 1)
+        self.assertTrue(meta_scrolled["sourceInView"])
+        self.assertTrue(meta_scrolled["targetInView"])
+        self.assertFalse(meta_scrolled["unreachable"])
 
 
 if __name__ == "__main__":
