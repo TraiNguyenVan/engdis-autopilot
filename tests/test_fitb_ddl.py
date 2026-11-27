@@ -950,7 +950,7 @@ console.log(JSON.stringify(out));
         ])
 
     def test_portal_open_provenance_rejects_preexisting_stale_menu_in_node(self):
-        """Re-review finding #2 in V8: unlinked menu already visible before `s.click()` is rejected."""
+        """A stale unlinked menu is rejected; an explicitly owned fresh menu works."""
         node_bin = shutil.which("node")
         if not node_bin:
             return
@@ -961,7 +961,7 @@ const practice = new El('div', 'learning__angPracticeW');
 body.append(practice);
 
 const s0 = new El('div', 'DDLOptions__selected', 'large');
-const s1 = new El('div', 'DDLOptions__selected', 'however');
+const s1 = new El('div', 'DDLOptions__selected', 'however', {id: 'target', 'aria-controls': 'fresh-menu'});
 practice.append(new El('div', 'DDLOptionsW').append(s0), new El('div', 'DDLOptionsW').append(s1));
 
 // Stale unlinked menu from Blank 0 already visible on body before s1 is clicked:
@@ -983,9 +983,9 @@ window._edFitbPortalState = { trigger: s1, beforeVis: new WeakSet(preVis1) };
 s1.click();
 const afterBrokenOpen = getScopedOptions(s1);
 
-// 2. Now simulate s1.click() actually mounting a fresh portal menu for s1:
+// 2. Now simulate s1.click() mounting a portal explicitly associated with s1:
 const freshOpt = new El('li', 'DDLOptions__listItem', 'however');
-s1.onclick = () => { body.append(new El('ul', 'DDLOptions__list').append(freshOpt)); };
+s1.onclick = () => { body.append(new El('ul', 'DDLOptions__list', '', {id: 'fresh-menu'}).append(freshOpt)); };
 const preVis2 = selectableOptions(document.querySelectorAll(OPT_SEL)).filter(isVisible);
 window._edFitbPortalState = { trigger: s1, beforeVis: new WeakSet(preVis2) };
 s1.click();
@@ -1003,9 +1003,69 @@ console.log(JSON.stringify({
         self.assertEqual(parsed, {
             "brokenScope": "none",
             "brokenCount": 0,
-            "realScope": "document",
+            "realScope": "portal-linked",
             "realIsFresh": True,
         })
+
+    def test_unlinked_stale_portal_created_after_click_is_not_owned(self):
+        """Timing and identical option text do not prove a portal belongs to a trigger."""
+        node_bin = shutil.which("node")
+        if not node_bin:
+            self.skipTest("node is required to execute the production DOM helper")
+        harness = _NODE_DOM_SHIM + r"""
+const body = new El('body');
+const documentElement = new El('html').append(body);
+const practice = new El('div', 'learning__angPracticeW');
+body.append(practice);
+const s0 = new El('div', 'DDLOptions__selected', 'large');
+const s1 = new El('div', 'DDLOptions__selected', 'however');
+practice.append(new El('div', 'DDLOptionsW').append(s0), new El('div', 'DDLOptionsW').append(s1));
+const document = {
+  body, documentElement,
+  querySelectorAll: (s) => documentElement.querySelectorAll(s),
+  querySelector: (s) => documentElement.querySelector(s),
+};
+const window = { getComputedStyle: (el) => el.style };
+""" + solver._FITB_DOM_JS + r"""
+const before = selectableOptions(document.querySelectorAll(OPT_SEL)).filter(isVisible);
+window._edFitbPortalState = { trigger: s1, beforeVis: new WeakSet(before) };
+// A stale menu for s0 is remounted while s1 fails to open; its complete option
+// set is identical to s1's expected options and s1 already displays however.
+s1.onclick = () => body.append(new El('ul', 'DDLOptions__list').append(
+  new El('li', 'DDLOptions__listItem', 'however'),
+  new El('li', 'DDLOptions__listItem', 'therefore')));
+s1.click();
+const res = getScopedOptions(s1);
+console.log(JSON.stringify({scope: res.scope, count: res.items.length}));
+"""
+        proc = subprocess.run([node_bin, "-e", harness], check=True, capture_output=True, text=True)
+        self.assertEqual(json.loads(proc.stdout), {"scope": "none", "count": 0})
+
+    def test_portal_with_multiple_claiming_triggers_is_rejected(self):
+        node_bin = shutil.which("node")
+        if not node_bin:
+            self.skipTest("node is required to execute the production DOM helper")
+        harness = _NODE_DOM_SHIM + r"""
+const body = new El('body');
+const documentElement = new El('html').append(body);
+const practice = new El('div', 'learning__angPracticeW');
+body.append(practice);
+const s0 = new El('div', 'DDLOptions__selected', 'large', {'aria-controls': 'shared'});
+const s1 = new El('div', 'DDLOptions__selected', 'however', {'aria-controls': 'shared'});
+practice.append(new El('div', 'DDLOptionsW').append(s0), new El('div', 'DDLOptionsW').append(s1));
+body.append(new El('ul', 'DDLOptions__list', '', {id: 'shared'}).append(
+  new El('li', 'DDLOptions__listItem', 'however')));
+const document = {
+  body, documentElement,
+  querySelectorAll: (s) => documentElement.querySelectorAll(s),
+  querySelector: (s) => documentElement.querySelector(s),
+};
+const window = { getComputedStyle: (el) => el.style };
+""" + solver._FITB_DOM_JS + r"""
+console.log(JSON.stringify({scope: getScopedOptions(s0).scope, count: getScopedOptions(s0).items.length}));
+"""
+        proc = subprocess.run([node_bin, "-e", harness], check=True, capture_output=True, text=True)
+        self.assertEqual(json.loads(proc.stdout), {"scope": "none", "count": 0})
 
     def test_pick_js_fails_closed_in_node_when_target_option_disappears(self):
         node_bin = shutil.which("node")

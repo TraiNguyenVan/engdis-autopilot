@@ -958,12 +958,6 @@ _FITB_DOM_JS = r"""
   const OPT_SEL = '.DDLOptions__listItem, .DDLOptions__list li, .DDLOptions__option';
   const hasAttr = (el, name) => !!(el && el.hasAttribute && el.hasAttribute(name));
   const getAttr = (el, name) => (el && el.getAttribute) ? el.getAttribute(name) : null;
-  const hasInSet = (col, el) => {
-    if (!col || !el) return false;
-    if (typeof col.has === 'function') return col.has(el);
-    if (Array.isArray(col)) return col.indexOf(el) >= 0;
-    return false;
-  };
   const getOptText = (el) => ((el && (el.innerText || el.textContent)) || '').replace(/\s+/g, ' ').trim();
   const isOptionPlaceholder = (el) => {
     if (!el) return true;
@@ -1041,20 +1035,21 @@ _FITB_DOM_JS = r"""
       anc = anc.parentElement;
     }
     if (!portalIds.size && !labelledBy.size) return null;
+    const owners = new Set();
     for (const trig of allTriggers) {
       const scopes = [trig, ...getContainers(trig)];
       for (const sc of scopes) {
-        if (sc && sc.id && labelledBy.has(String(sc.id))) return trig;
+        if (sc && sc.id && labelledBy.has(String(sc.id))) owners.add(trig);
         for (const attr of ['aria-controls', 'aria-owns', 'data-target', 'data-dropdown', 'data-menu', 'data-portal']) {
           const raw = getAttr(sc, attr);
           if (!raw) continue;
           for (const tok of String(raw).split(/\s+/).filter(Boolean)) {
-            if (portalIds.has(tok.replace(/^#/, ''))) return trig;
+            if (portalIds.has(tok.replace(/^#/, ''))) owners.add(trig);
           }
         }
       }
     }
-    return null;
+    return owners.size === 1 ? [...owners][0] : null;
   };
   const dedupOptions = (nodes) => {
     const arr = [...nodes];
@@ -1069,10 +1064,9 @@ _FITB_DOM_JS = r"""
       const vis = raw.filter(isVisible);
       if (vis.length) return {items: vis, scope: 'container'};
     }
-    const hasLayout = !!(typeof document !== 'undefined' && document.body && document.body.getBoundingClientRect &&
-      (document.body.getBoundingClientRect().width > 0 || document.body.getBoundingClientRect().height > 0));
+    // A newly visible unlinked menu may be a remounted stale portal. Timing,
+    // geometry, and matching text do not establish ownership, so fail closed.
     const linkedVis = [];
-    const openedVis = [];
     for (const el of selectableOptions(document.querySelectorAll(OPT_SEL))) {
       if (!isVisible(el)) continue;
       let ownedByOtherContainer = false;
@@ -1089,32 +1083,9 @@ _FITB_DOM_JS = r"""
       }
       if (ownedByOtherContainer) continue;
       const explicitOwner = getPortalOwner(el);
-      if (explicitOwner) {
-        if (explicitOwner === s) linkedVis.push(el);
-        continue;
-      }
-      const st = (typeof window !== 'undefined' && window) ? window._edFitbPortalState : null;
-      if (!st || st.trigger !== s) continue;
-      if (hasInSet(st.beforeVis, el)) continue;
-      if (hasLayout && el.getBoundingClientRect && s.getBoundingClientRect) {
-        const er = el.getBoundingClientRect();
-        const sr = s.getBoundingClientRect();
-        if (er.width > 0 && sr.width > 0) {
-          const distS = Math.hypot(er.x - sr.x, er.y - (sr.bottom || (sr.y + sr.height)));
-          const closerToOther = getTriggers().some(o => {
-            if (o === s || !o.getBoundingClientRect) return false;
-            const or = o.getBoundingClientRect();
-            if (!or || or.width <= 0) return false;
-            const distO = Math.hypot(er.x - or.x, er.y - (or.bottom || (or.y + or.height)));
-            return distO < 60 && distO + 20 < distS;
-          });
-          if (closerToOther) continue;
-        }
-      }
-      openedVis.push(el);
+      if (explicitOwner === s) linkedVis.push(el);
     }
     if (linkedVis.length) return {items: linkedVis, scope: 'portal-linked'};
-    if (openedVis.length) return {items: openedVis, scope: 'document'};
     for (const c of containers) {
       const raw = selectableOptions(c.querySelectorAll(OPT_SEL));
       if (raw.length) return {items: raw, scope: 'container-hidden'};
@@ -1189,13 +1160,6 @@ def _open_and_read_ddl(t, idx, attempt=0, force_close=False):
       }}
       const cur = getScopedOptions(s);
       if ({attempt} === 0 || {'true' if force_close else 'false'} || cur.scope === 'none' || cur.scope === 'container-hidden') {{
-        const preVis = selectableOptions(document.querySelectorAll(OPT_SEL)).filter(isVisible);
-        if (typeof window !== 'undefined' && window) {{
-          window._edFitbPortalState = {{
-            trigger: s,
-            beforeVis: typeof WeakSet === 'function' ? new WeakSet(preVis) : preVis
-          }};
-        }}
         if ({attempt} > 0) fireMouse(s);
         s.click();
       }}
