@@ -365,6 +365,24 @@ def transcribe_groq(media_path: str) -> str:
     return ""
 
 
+def _publish_transcript(destination, text):
+    """Publish complete text once without overwriting a concurrent writer."""
+    temp_path = None
+    try:
+        with tempfile.NamedTemporaryFile(mode="w", encoding="utf-8", dir=SCRATCH,
+                                         prefix=".transcript-", delete=False) as f:
+            temp_path = f.name
+            f.write(text)
+            f.flush()
+            os.fsync(f.fileno())
+        # A hard link publishes the completed inode atomically and fails if the
+        # destination exists, including when another writer won the race.
+        os.link(temp_path, destination)
+    finally:
+        if temp_path is not None:
+            os.unlink(temp_path)
+
+
 def migrate_legacy_transcript(url, legacy_path):
     """Copy a manually verified transcript to its URL-specific cache entry.
 
@@ -375,8 +393,7 @@ def migrate_legacy_transcript(url, legacy_path):
         text = f.read()
     os.makedirs(SCRATCH, exist_ok=True)
     destination = os.path.join(SCRATCH, f"tr_{_media_cache_key(url)}.txt")
-    with open(destination, "x", encoding="utf-8") as f:
-        f.write(text)
+    _publish_transcript(destination, text)
 
 
 def transcript_for(url, cache_key):
@@ -432,9 +449,11 @@ def transcript_for(url, cache_key):
 
     if txt:
         try:
-            with open(path, "w", encoding="utf-8") as f:
-                f.write(txt)
-        except Exception:
+            _publish_transcript(path, txt)
+        except FileExistsError:
+            with open(path, encoding="utf-8") as f:
+                return f.read()
+        except OSError:
             pass
     return txt
 

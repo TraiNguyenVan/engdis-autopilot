@@ -53,7 +53,13 @@ solver.migrate_legacy_transcript(verified_url, legacy_transcript_path)
 Supply these variables interactively in a private environment; do not put signed
 URLs or tokens in shell history, logs, or committed files. Migration copies the
 text without deleting the original and refuses to overwrite an existing URL-keyed
-entry. Migrating for a later changed token requires re-verification and another
+entry. Publishing uses a temporary file and an atomic hard link within the
+cache directory; the cache filesystem must support hard links. If it does not,
+manual migration fails without replacing the destination; automatic transcription
+still returns its result but cannot persist it. A process killed abruptly may
+leave a hidden `.transcript-*` temporary file, not a valid cache entry. This is
+atomic publication, not a guarantee of persistence after power loss.
+Migrating for a later changed token requires re-verification and another
 migration. Incorrect provenance maps the wrong transcript; if uncertain, allow a
 fresh download/transcription instead.
 

@@ -1,4 +1,8 @@
 import os
+import subprocess
+import sys
+import textwrap
+import threading
 import shutil
 import tempfile
 import unittest
@@ -125,6 +129,120 @@ class AttachTranscriptTests(unittest.TestCase):
 
 
 class TranscriptIdentityRegressionTests(unittest.TestCase):
+    @unittest.skipUnless(sys.platform.startswith("linux"), "requires Linux RLIMIT_FSIZE")
+    def test_legacy_migration_partial_write_is_removed_and_retry_succeeds(self):
+        script = textwrap.dedent('''
+            import os, resource, signal, sys
+            import solver
+            scratch, source = sys.argv[1:]
+            solver.SCRATCH = scratch
+            url = "https://cdn.example.com/a/clip.mp3"
+            destination = os.path.join(scratch, "tr_" + solver._media_cache_key(url) + ".txt")
+            signal.signal(signal.SIGXFSZ, signal.SIG_IGN)
+            previous = resource.getrlimit(resource.RLIMIT_FSIZE)
+            resource.setrlimit(resource.RLIMIT_FSIZE, (16, previous[1]))
+            try:
+                try:
+                    solver.migrate_legacy_transcript(url, source)
+                except OSError:
+                    pass
+                else:
+                    raise AssertionError("write did not fail")
+            finally:
+                resource.setrlimit(resource.RLIMIT_FSIZE, previous)
+            assert not os.path.exists(destination), "partial destination was published"
+            assert os.listdir(scratch) == [], os.listdir(scratch)
+            solver.migrate_legacy_transcript(url, source)
+            with open(destination) as f:
+                assert f.read() == "original transcript " * 1000
+        ''')
+        with tempfile.TemporaryDirectory() as tmp:
+            scratch = os.path.join(tmp, "cache")
+            source = os.path.join(tmp, "legacy.txt")
+            os.mkdir(scratch)
+            with open(source, "w") as f:
+                f.write("original transcript " * 1000)
+            result = subprocess.run([sys.executable, "-c", script, scratch, source],
+                                    capture_output=True, text=True)
+            self.assertEqual(result.returncode, 0, result.stderr)
+            with open(source) as f:
+                self.assertEqual(f.read(), "original transcript " * 1000)
+
+    def test_transcription_cannot_overwrite_a_concurrent_migration(self):
+        url = "https://cdn.example.com/a.mp4"
+        class Response:
+            def __enter__(self): return self
+            def __exit__(self, *args): pass
+            def read(self): return b"media"
+        with tempfile.TemporaryDirectory() as tmp:
+            source = os.path.join(tmp, "legacy.txt")
+            with open(source, "w") as f: f.write("verified legacy")
+            def transcribe(_path):
+                solver.migrate_legacy_transcript(url, source)
+                return "fresh transcript"
+            with patch.object(solver, "SCRATCH", tmp), \
+                 patch.object(solver.urllib.request, "urlopen", return_value=Response()), \
+                 patch.object(solver, "transcribe_groq", side_effect=transcribe):
+                solver.transcript_for(url, "ignored")
+                self.assertEqual(solver.transcript_for(url, "ignored"), "verified legacy")
+
+    def test_migration_publish_failure_cleans_temporary_file(self):
+        url = "https://cdn.example.com/a.mp3"
+        with tempfile.TemporaryDirectory() as tmp:
+            source = os.path.join(tmp, "legacy.txt")
+            with open(source, "w") as f:
+                f.write("source")
+            with patch.object(solver, "SCRATCH", tmp), \
+                 patch.object(solver.os, "link", side_effect=OSError("unsupported")):
+                with self.assertRaises(OSError):
+                    solver.migrate_legacy_transcript(url, source)
+            self.assertEqual(os.listdir(tmp), ["legacy.txt"])
+
+    def test_migration_never_overwrites_existing_transcript(self):
+        url = "https://cdn.example.com/a.mp3"
+        with tempfile.TemporaryDirectory() as tmp:
+            source = os.path.join(tmp, "legacy.txt")
+            destination = os.path.join(tmp, f"tr_{solver._media_cache_key(url)}.txt")
+            with open(source, "w") as f: f.write("source")
+            with open(destination, "w") as f: f.write("existing")
+            with patch.object(solver, "SCRATCH", tmp):
+                with self.assertRaises(FileExistsError):
+                    solver.migrate_legacy_transcript(url, source)
+            with open(destination) as f: self.assertEqual(f.read(), "existing")
+            with open(source) as f: self.assertEqual(f.read(), "source")
+            self.assertEqual(set(os.listdir(tmp)), {"legacy.txt", os.path.basename(destination)})
+
+    def test_concurrent_migrations_publish_only_one_complete_transcript(self):
+        url = "https://cdn.example.com/a.mp3"
+        with tempfile.TemporaryDirectory() as tmp:
+            sources = [os.path.join(tmp, f"legacy{i}.txt") for i in range(2)]
+            contents = ["first" * 5000, "second" * 5000]
+            for path, text in zip(sources, contents):
+                with open(path, "w") as f: f.write(text)
+            barrier = threading.Barrier(2)
+            real_link = os.link
+            results = []
+            def concurrent_link(src, dst):
+                barrier.wait(timeout=5)
+                return real_link(src, dst)
+            def migrate(path):
+                try:
+                    solver.migrate_legacy_transcript(url, path)
+                    results.append("success")
+                except FileExistsError:
+                    results.append("exists")
+                except Exception as exc:
+                    results.append(repr(exc))
+            with patch.object(solver, "SCRATCH", tmp), patch.object(solver.os, "link", side_effect=concurrent_link):
+                threads = [threading.Thread(target=migrate, args=(path,)) for path in sources]
+                for thread in threads: thread.start()
+                for thread in threads: thread.join(timeout=10)
+            self.assertFalse(any(thread.is_alive() for thread in threads))
+            self.assertCountEqual(results, ["success", "exists"])
+            destination = os.path.join(tmp, f"tr_{solver._media_cache_key(url)}.txt")
+            with open(destination) as f: self.assertIn(f.read(), contents)
+            self.assertEqual(set(os.listdir(tmp)), {"legacy0.txt", "legacy1.txt", os.path.basename(destination)})
+
     def test_fragment_does_not_change_media_type(self):
         class Response:
             def __enter__(self): return self
